@@ -8,10 +8,6 @@ namespace GitBranchSwitcher
         public bool SwitchOk { get; set; }
         public string? LastMessage { get; set; }
 
-        public GitRepo(string name, string path)
-        {
-            Name = name;
-            Path = path;
-        }
+        public GitRepo(string name, string path) { Name = name; Path = path; }
     }
 }
