@@ -59,16 +59,13 @@ namespace GitBranchSwitcher
             InitUi();
             LoadStateImagesRandom(); 
             SetSwitchState(SwitchState.NotStarted);
-            
-            // 初始化排行榜路径
             LeaderboardService.SetPath(_settings.LeaderboardPath);
-            
             SeedParentsToUi();
             UpdateStatsUi(); 
         }
 
         private void InitializeComponent() {
-            Text = "Unity 项目切线工具 (Rank Edition)";
+            Text = "Unity 项目切线工具 (Rank UI Polish)";
             Width = 1400;
             Height = 900;
             StartPosition = FormStartPosition.CenterScreen;
@@ -162,13 +159,11 @@ namespace GitBranchSwitcher
 
             repoToolbar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(6) };
             var btnR1 = new Button { Text = "取消" }; var btnR2 = new Button { Text = "全选" }; var btnR3 = new Button { Text = "全不选" };
-            
-            // [新增] 🏆 排行榜按钮
             var btnRank = new Button { Text = "🏆 排行榜", AutoSize = true, ForeColor = Color.DarkGoldenrod, Font = new Font(DefaultFont, FontStyle.Bold) };
             btnRank.Click += (_, __) => ShowLeaderboard();
 
             repoToolbar.Controls.Add(btnR1); repoToolbar.Controls.Add(btnR2); repoToolbar.Controls.Add(btnR3);
-            repoToolbar.Controls.Add(btnRank); // 加入工具栏
+            repoToolbar.Controls.Add(btnRank); 
 
             btnR1.Click += (_,__) => { foreach(ListViewItem i in lvRepos.Items) i.Checked=false; };
             btnR2.Click += (_,__) => { foreach(ListViewItem i in lvRepos.Items) i.Checked=true; };
@@ -231,23 +226,26 @@ namespace GitBranchSwitcher
             Controls.Add(splitMain); Controls.Add(tlTop); Controls.Add(statusStrip);
         }
 
-        // [新增] 显示排行榜窗口的逻辑
+        // [修改] 排行榜窗口逻辑 - 优化UI和格式
         private async void ShowLeaderboard()
         {
             if (string.IsNullOrEmpty(_settings.LeaderboardPath))
             {
-                string input = Microsoft.VisualBasic.Interaction.InputBox("请输入共享文件路径 (如 \\\\SERVER\\Share\\rank.json):", "设置", _settings.LeaderboardPath);
+                string input = Microsoft.VisualBasic.Interaction.InputBox("请输入共享文件路径:", "设置", _settings.LeaderboardPath);
                 if (string.IsNullOrWhiteSpace(input)) return;
                 _settings.LeaderboardPath = input; _settings.Save(); LeaderboardService.SetPath(input);
             }
 
-            // 动态创建一个简单的窗口
-            var form = new Form { Text = "👑 卷王 & 摸鱼王 排行榜", Width = 600, Height = 500, StartPosition = FormStartPosition.CenterParent };
-            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 290 };
+            var form = new Form { Text = "👑 卷王 & 摸鱼王 排行榜", Width = 940, Height = 493, StartPosition = FormStartPosition.CenterParent };
+            
+            // [修改] 左右对半分 (940 / 2 - 边框 ≈ 465)
+            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 465 };
+            
             var listCount = new ListView { Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true };
-            listCount.Columns.Add("排名", 50); listCount.Columns.Add("🌭 香肠切线王 (次数)", 150); listCount.Columns.Add("次数", 60);
+            listCount.Columns.Add("排名", 50); listCount.Columns.Add("用户", 250); listCount.Columns.Add("切线次数", 100);
+            
             var listDuration = new ListView { Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true };
-            listDuration.Columns.Add("排名", 50); listDuration.Columns.Add("🐟 香肠摸鱼王 (时长)", 150); listDuration.Columns.Add("总时长", 80);
+            listDuration.Columns.Add("排名", 50); listDuration.Columns.Add("用户", 250); listDuration.Columns.Add("摸鱼总时长", 120); // 加宽时长列
 
             var lblMy = new Label { Dock = DockStyle.Bottom, Height = 40, TextAlign = ContentAlignment.MiddleCenter, Font = new Font(DefaultFont, FontStyle.Bold), Text = "正在加载数据..." };
 
@@ -256,24 +254,37 @@ namespace GitBranchSwitcher
             form.Controls.Add(split);
             form.Controls.Add(lblMy);
 
+            // [新增] 统一的时间格式化函数
+            Func<double, string> formatTime = (sec) => {
+                var ts = TimeSpan.FromSeconds(sec);
+                if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}小时{ts.Minutes}分{ts.Seconds}秒";
+                if (ts.TotalMinutes >= 1) return $"{ts.Minutes}分{ts.Seconds}秒";
+                return $"{ts.Seconds}秒";
+            };
+
             form.Shown += async (_, __) => {
                 var data = await LeaderboardService.GetLeaderboardAsync();
                 
-                // 1. 次数榜
+                // 1. 切线榜 (次数)
                 var sortedCount = data.OrderByDescending(x => x.TotalSwitches).ToList();
                 for (int i = 0; i < sortedCount.Count; i++) {
                     var u = sortedCount[i];
                     var icon = i == 0 ? "🥇" : (i == 1 ? "🥈" : (i == 2 ? "🥉" : ""));
-                    listCount.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), $"{icon} {u.Name}", u.TotalSwitches.ToString() }));
+                    string nameDisplay = $"{icon} {u.Name}";
+                    if (i == 0) nameDisplay += " (🌭香肠切线王)"; // 仅第一名加后缀
+
+                    listCount.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), nameDisplay, u.TotalSwitches.ToString() }));
                 }
 
-                // 2. 时长榜
+                // 2. 摸鱼榜 (时长)
                 var sortedTime = data.OrderByDescending(x => x.TotalDuration).ToList();
                 for (int i = 0; i < sortedTime.Count; i++) {
                     var u = sortedTime[i];
-                    var icon = i == 0 ? "👑" : ""; // 摸鱼王皇冠
-                    string timeStr = u.TotalDuration > 3600 ? $"{(u.TotalDuration/3600):F1}h" : $"{(u.TotalDuration/60):F0}m";
-                    listDuration.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), $"{icon} {u.Name}", timeStr }));
+                    var icon = i == 0 ? "👑" : (i == 1 ? "🥈" : (i == 2 ? "🥉" : ""));
+                    string nameDisplay = $"{icon} {u.Name}";
+                    if (i == 0) nameDisplay += " (🐟香肠摸鱼王)"; // 仅第一名加后缀
+
+                    listDuration.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), nameDisplay, formatTime(u.TotalDuration) }));
                 }
 
                 // 3. 我的数据
@@ -281,8 +292,7 @@ namespace GitBranchSwitcher
                 if (me != null) {
                     int myRankCount = sortedCount.IndexOf(me) + 1;
                     int myRankTime = sortedTime.IndexOf(me) + 1;
-                    string myTime = me.TotalDuration > 60 ? $"{(me.TotalDuration/60):F0}分钟" : $"{me.TotalDuration:F0}秒";
-                    lblMy.Text = $"我 ({me.Name})：切线 {me.TotalSwitches} 次 (第{myRankCount}名) | 摸鱼 {myTime} (第{myRankTime}名)";
+                    lblMy.Text = $"我 ({me.Name})：切线 {me.TotalSwitches} 次 (第{myRankCount}名) | 摸鱼总时长 {formatTime(me.TotalDuration)} (第{myRankTime}名)";
                 } else {
                     lblMy.Text = "暂无我的数据，快去切一次线吧！";
                 }
@@ -297,7 +307,19 @@ namespace GitBranchSwitcher
         private void SetSwitchState(SwitchState st) { if (st == SwitchState.NotStarted) { ApplyImageTo(pbState, "state_notstarted", TARGET_BOX); lblStateText.Text = "未开始"; } if (st == SwitchState.Switching) { ApplyImageTo(pbState, "state_switching", TARGET_BOX); lblStateText.Text = "切线中..."; } if (st == SwitchState.Done) { ApplyImageTo(pbState, "state_done", TARGET_BOX); lblStateText.Text = "搞定!"; } }
         private void SeedParentsToUi() { if(lbParents==null) return; lbParents.BeginUpdate(); lbParents.Items.Clear(); foreach(var p in _settings.ParentPaths) { int i=lbParents.Items.Add(p); if(_checkedParents.Contains(p)) lbParents.SetItemChecked(i,true); } lbParents.EndUpdate(); }
         private void RefilterParentsList() { lbParents.BeginUpdate(); lbParents.Items.Clear(); var kw=txtSearch.Text.Trim(); foreach(var p in _settings.ParentPaths) { if(string.IsNullOrEmpty(kw)||p.IndexOf(kw,StringComparison.OrdinalIgnoreCase)>=0) { int i=lbParents.Items.Add(p); if(_checkedParents.Contains(p)) lbParents.SetItemChecked(i,true); } } lbParents.EndUpdate(); }
-        private void UpdateStatsUi() { if (statusStats != null) { TimeSpan ts = TimeSpan.FromSeconds(_settings.TodayTotalSeconds); string timeStr = ts.TotalMinutes >= 1 ? $"{(int)ts.TotalMinutes}分{ts.Seconds}秒" : $"{ts.Seconds}秒"; statusStats.Text = $"📅 今日统计：切线 {_settings.TodaySwitchCount} 次 | 总耗时 {timeStr}"; } }
+        
+        // [修改] 底部统计栏也用同样的格式
+        private void UpdateStatsUi() { 
+            if (statusStats != null) { 
+                var ts = TimeSpan.FromSeconds(_settings.TodayTotalSeconds);
+                string timeStr;
+                if (ts.TotalHours >= 1) timeStr = $"{(int)ts.TotalHours}小时{ts.Minutes}分{ts.Seconds}秒";
+                else if (ts.TotalMinutes >= 1) timeStr = $"{ts.Minutes}分{ts.Seconds}秒";
+                else timeStr = $"{ts.Seconds}秒";
+
+                statusStats.Text = $"📅 今日统计：切线 {_settings.TodaySwitchCount} 次 | 总耗时 {timeStr}"; 
+            } 
+        }
 
         private async Task LoadReposForCheckedParentsAsync() {
             _loadCts?.Cancel(); _loadCts = new System.Threading.CancellationTokenSource(); var token = _loadCts.Token; var seq = ++_loadSeq;
@@ -371,7 +393,7 @@ namespace GitBranchSwitcher
             var tasks = new List<Task>();
             Log($">>> 开始一键切线：{target} [极速模式:{_settings.FastMode}]");
             
-            var batchSw = Stopwatch.StartNew(); // [新增] 总计时
+            var batchSw = Stopwatch.StartNew();
 
             foreach(var item in items) {
                 tasks.Add(Task.Run(async () => {
@@ -396,14 +418,12 @@ namespace GitBranchSwitcher
             await Task.WhenAll(tasks);
             batchSw.Stop();
 
-            // [新增] 统计更新与上报
             _settings.CheckDateReset();
             _settings.TodaySwitchCount++;
             _settings.TodayTotalSeconds += batchSw.Elapsed.TotalSeconds;
             _settings.Save();
             UpdateStatsUi();
             
-            // 默默上传数据到共享文件
             if(!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
                 _ = LeaderboardService.UploadMyScoreAsync(batchSw.Elapsed.TotalSeconds);
             }
