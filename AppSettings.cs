@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq; // 必须引用
 using System.Text.Json;
 
 namespace GitBranchSwitcher
@@ -8,15 +9,16 @@ namespace GitBranchSwitcher
     public class AppSettings
     {
         public bool StashOnSwitch { get; set; } = true;
+        public bool FastMode { get; set; } = false;
         public int MaxParallel { get; set; } = 16;
         public List<string> ParentPaths { get; set; } = new List<string>();
 
-        // [更新] 新的目录列表
+        // 默认列表
         public List<string> SubDirectoriesToScan { get; set; } = new List<string>
         {
             "", // 根目录
             "Assets/ToBundle",
-            "Assets/Script",            // [Script 仓] 确保这个文件夹里有 .git
+            "Assets/Script",            // 确保这里有
             "Assets/Script/Biubiubiu2", 
             "Assets/Art",
             "Assets/Scenes",
@@ -28,6 +30,7 @@ namespace GitBranchSwitcher
         public string DirSwitching { get; set; } = "";
         public string DirDone { get; set; } = "";
         public string DirFlash { get; set; } = "";
+
         private static string SettingsDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GitBranchSwitcher");
         private static string SettingsFile => Path.Combine(SettingsDir, "settings.json");
 
@@ -35,22 +38,44 @@ namespace GitBranchSwitcher
         {
             try {
                 if (File.Exists(SettingsFile)) {
-                    var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsFile));
+                    var json = File.ReadAllText(SettingsFile);
+                    var s = JsonSerializer.Deserialize<AppSettings>(json);
                     if (s != null) {
-                        // 强制更新列表 (如果旧配置存在，覆盖它以应用新路径)
-                        // 注意：如果你有自定义修改过本地配置，这一步会覆盖。
-                        // 这里为了确保 Script 仓生效，我暂时覆盖了。
-                        s.SubDirectoriesToScan = new List<string> {
-                             "", "Assets/ToBundle", "Assets/Script", "Assets/Script/Biubiubiu2",
-                             "Assets/Art", "Assets/Scenes", "Library/ConfigCache", "Assets/Audio"
-                        };
-                        if (s.MaxParallel < 8) s.MaxParallel = 16;
+                        // [关键修复] 即使读取了旧配置，也强制检查 Assets/Script 是否存在
+                        // 如果不存在，说明是旧配置缓存，强制加上！
+                        if (s.SubDirectoriesToScan == null) s.SubDirectoriesToScan = new List<string>();
+                        
+                        var requiredPaths = new[] { "Assets/Script", "Assets/Script/Biubiubiu2" };
+                        bool changed = false;
+                        foreach (var req in requiredPaths)
+                        {
+                            // 不区分大小写检查是否存在
+                            if (!s.SubDirectoriesToScan.Any(x => string.Equals(x, req, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                s.SubDirectoriesToScan.Add(req);
+                                changed = true;
+                            }
+                        }
+
+                        // 强制更新并发数
+                        if (s.MaxParallel < 16) s.MaxParallel = 16;
+                        
+                        // 如果刚才补全了路径，顺便保存一下，方便下次
+                        if (changed) s.Save();
+
                         return s;
                     }
                 }
             } catch { }
             return new AppSettings();
         }
-        public void Save() { try { Directory.CreateDirectory(SettingsDir); File.WriteAllText(SettingsFile, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true })); } catch { } }
+
+        public void Save()
+        {
+            try {
+                Directory.CreateDirectory(SettingsDir);
+                File.WriteAllText(SettingsFile, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            } catch { }
+        }
     }
 }
