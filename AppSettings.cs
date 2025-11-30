@@ -6,12 +6,18 @@ using System.Text.Json;
 
 namespace GitBranchSwitcher
 {
-    // [新增] 简单的缓存结构
-    public class RepoCacheItem
+    // [新增] 单个仓库信息
+    public class SubRepoItem
     {
         public string Name { get; set; } = "";
-        public string Path { get; set; } = "";
-        public string ParentName { get; set; } = "";
+        public string FullPath { get; set; } = "";
+    }
+
+    // [新增] 父节点缓存单元：一个父目录 -> 多个子仓库
+    public class ParentRepoCache
+    {
+        public string ParentPath { get; set; } = "";
+        public List<SubRepoItem> Children { get; set; } = new List<SubRepoItem>();
     }
 
     public class AppSettings
@@ -19,21 +25,23 @@ namespace GitBranchSwitcher
         public bool StashOnSwitch { get; set; } = true;
         public bool FastMode { get; set; } = false;
         public int MaxParallel { get; set; } = 16;
+        
         public List<string> ParentPaths { get; set; } = new List<string>();
 
-        // [新增] 缓存扫描结果，下次启动直接用
-        public List<RepoCacheItem> CachedRepos { get; set; } = new List<RepoCacheItem>();
+        // [修改] 结构化缓存：保存每个父目录下扫描到了哪些子仓库
+        public List<ParentRepoCache> RepositoryCache { get; set; } = new List<ParentRepoCache>();
 
-        // 统计
+        // 废弃旧缓存字段
+        // public List<RepoCacheItem> CachedRepos { get; set; } 
+
+        // 统计与配置
         public DateTime LastStatDate { get; set; } = DateTime.MinValue; 
         public int TodaySwitchCount { get; set; } = 0;                  
         public double TodayTotalSeconds { get; set; } = 0;              
         public string LeaderboardPath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData\rank.json"; 
 
-        public string DirNotStarted { get; set; } = "";
-        public string DirSwitching { get; set; } = "";
-        public string DirDone { get; set; } = "";
-        public string DirFlash { get; set; } = "";
+        // 分支列表缓存
+        public List<string> CachedBranchList { get; set; } = new List<string>();
 
         private static string SettingsDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GitBranchSwitcher");
         private static string SettingsFile => Path.Combine(SettingsDir, "settings.json");
@@ -51,7 +59,10 @@ namespace GitBranchSwitcher
 
             if (s.MaxParallel < 16) s.MaxParallel = 16;
             if (string.IsNullOrWhiteSpace(s.LeaderboardPath)) s.LeaderboardPath = @"\\SS-ZHOUSHUAI\GitRankData\rank.json";
-            if (s.CachedRepos == null) s.CachedRepos = new List<RepoCacheItem>();
+            
+            // 初始化集合防止空引用
+            if (s.RepositoryCache == null) s.RepositoryCache = new List<ParentRepoCache>();
+            if (s.CachedBranchList == null) s.CachedBranchList = new List<string>();
 
             s.CheckDateReset();
             return s;

@@ -5,16 +5,12 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <DefineConstants>BOSS_MODE</DefineConstants>
     <ApplicationIcon>AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Assets\**\*" />
   </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Include="Resources\**\*" />
-  </ItemGroup>
-
 </Project>
