@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
 
-    <DefineConstants>BOSS_MODE</DefineConstants>
+<!--    <DefineConstants>BOSS_MODE</DefineConstants>-->
     <ApplicationIcon>AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
