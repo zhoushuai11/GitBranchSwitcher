@@ -6,14 +6,14 @@ using System.Text.Json;
 
 namespace GitBranchSwitcher
 {
-    // [新增] 单个仓库信息
+    // [修复] 子仓库信息结构
     public class SubRepoItem
     {
         public string Name { get; set; } = "";
         public string FullPath { get; set; } = "";
     }
 
-    // [新增] 父节点缓存单元：一个父目录 -> 多个子仓库
+    // [修复] 父节点缓存结构
     public class ParentRepoCache
     {
         public string ParentPath { get; set; } = "";
@@ -28,20 +28,17 @@ namespace GitBranchSwitcher
         
         public List<string> ParentPaths { get; set; } = new List<string>();
 
-        // [修改] 结构化缓存：保存每个父目录下扫描到了哪些子仓库
+        // [重点] 使用结构化缓存：父目录 -> 子目录列表
         public List<ParentRepoCache> RepositoryCache { get; set; } = new List<ParentRepoCache>();
 
-        // 废弃旧缓存字段
-        // public List<RepoCacheItem> CachedRepos { get; set; } 
+        // 分支列表缓存
+        public List<string> CachedBranchList { get; set; } = new List<string>();
 
-        // 统计与配置
+        // 统计
         public DateTime LastStatDate { get; set; } = DateTime.MinValue; 
         public int TodaySwitchCount { get; set; } = 0;                  
         public double TodayTotalSeconds { get; set; } = 0;              
         public string LeaderboardPath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData\rank.json"; 
-
-        // 分支列表缓存
-        public List<string> CachedBranchList { get; set; } = new List<string>();
 
         private static string SettingsDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GitBranchSwitcher");
         private static string SettingsFile => Path.Combine(SettingsDir, "settings.json");
@@ -60,7 +57,7 @@ namespace GitBranchSwitcher
             if (s.MaxParallel < 16) s.MaxParallel = 16;
             if (string.IsNullOrWhiteSpace(s.LeaderboardPath)) s.LeaderboardPath = @"\\SS-ZHOUSHUAI\GitRankData\rank.json";
             
-            // 初始化集合防止空引用
+            // 初始化防止空引用
             if (s.RepositoryCache == null) s.RepositoryCache = new List<ParentRepoCache>();
             if (s.CachedBranchList == null) s.CachedBranchList = new List<string>();
 

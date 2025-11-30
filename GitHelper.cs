@@ -182,8 +182,8 @@ namespace GitBranchSwitcher
         }
 
         // ==================== 仓库瘦身 (GC) 逻辑 ====================
-
-        public static (bool ok, string log, string sizeInfo) GarbageCollect(string repoPath, bool aggressive)
+        // [修改] 返回值增加了 long bytesSaved
+        public static (bool ok, string log, string sizeInfo, long bytesSaved) GarbageCollect(string repoPath, bool aggressive)
         {
             var log = new StringBuilder();
             void Step(string s) => log.AppendLine(s);
@@ -196,22 +196,19 @@ namespace GitBranchSwitcher
             RunGit(repoPath, "remote prune origin", 60_000);
 
             string args;
-            if (aggressive)
-            {
-                Step("> 🚀 深度清理 (--aggressive)... 请耐心等待 (无限时)");
+            if (aggressive) {
+                Step("> 🚀 深度清理 (--aggressive)... (无限等待)");
                 args = "gc --prune=now --aggressive";
-            }
-            else
-            {
-                Step("> 🧹 快速清理... 请耐心等待");
+            } else {
+                Step("> 🧹 快速清理...");
                 args = "gc --prune=now";
             }
 
-            // GC 无限超时
+            // [关键] 无限等待 (-1)，防止大仓库中途被杀
             var (code, stdout, stderr) = RunGit(repoPath, args, -1);
 
-            if (code != 0)
-                return (false, log.AppendLine($"❌ 失败: {stderr}").ToString(), "无变化");
+            if (code != 0) 
+                return (false, log.AppendLine($"❌ 失败: {stderr}").ToString(), "无变化", 0);
 
             long sizeAfter = GetDirectorySize(gitDir);
             long saved = sizeBefore - sizeAfter;
@@ -220,7 +217,7 @@ namespace GitBranchSwitcher
             string resultMsg = $"{FormatSize(saved)} ({FormatSize(sizeBefore)} -> {FormatSize(sizeAfter)})";
             log.AppendLine($"✅ 完成！ 瘦身: {resultMsg}");
 
-            return (true, log.ToString(), FormatSize(saved));
+            return (true, log.ToString(), FormatSize(saved), saved);
         }
 
         // ==================== 修复逻辑 ====================

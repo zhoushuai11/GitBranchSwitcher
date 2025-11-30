@@ -67,25 +67,22 @@ namespace GitBranchSwitcher
             SetSwitchState(SwitchState.NotStarted);
             SeedParentsToUi();
             
-            // 启动分支缓存
+            // 启动分支下拉框缓存
             if (_settings.CachedBranchList != null && _settings.CachedBranchList.Count > 0) {
                 _allBranches = new List<string>(_settings.CachedBranchList);
                 UpdateBranchDropdown();
             }
-            // true = 强制刷新（扫描硬盘）
-            // false = 优先读缓存
-            _ = LoadReposForCheckedParentsAsync(true);
+
+            // [启动] 自动刷新一次 (true)，更新本地缓存
+            _ = LoadReposForCheckedParentsAsync(true); 
         }
 
-        // ... (保持 InitMyStatsAsync, InitializeComponent, InitUi 等代码不变) ...
-        // 请务必保留 InitUi 中的事件绑定，特别是 btnAddParent, btnRescan 等调用 LoadReposForCheckedParentsAsync 的地方
-        
-        private async Task InitMyStatsAsync() { if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) { var (c, t) = await LeaderboardService.GetMyStatsAsync(); UpdateStatsUi(c, t); } }
+        private async Task InitMyStatsAsync() { if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) { var (c, t, s) = await LeaderboardService.GetMyStatsAsync(); UpdateStatsUi(c, t, s); } }
         private void InitializeComponent() {
 #if BOSS_MODE
             Text = "Git 分支管理工具 (Enterprise)";
 #else
-            Text = "Unity 项目切线工具 (Cache V2)";
+            Text = "Unity 项目切线工具 (Super Cache)";
 #endif
             Width = 1400; Height = 900; StartPosition = FormStartPosition.CenterScreen;
         }
@@ -103,10 +100,11 @@ namespace GitBranchSwitcher
             tlTop.Controls.Add(lbParents, 0, 0); tlTop.Controls.Add(btnAddParent, 1, 0); tlTop.Controls.Add(btnRemoveParent, 2, 0); tlTop.Controls.Add(lblSearch, 3, 0); tlTop.Controls.Add(txtSearch, 4, 0); tlTop.Controls.Add(parentOps, 5, 0); tlTop.Controls.Add(lblHintParents, 0, 1); tlTop.SetColumnSpan(lblHintParents, 6);
             var cm = new ContextMenuStrip(); cm.Items.Add("添加父目录…", null, (_, __) => btnAddParent.PerformClick()); cm.Items.Add("移除选中", null, (_, __) => btnRemoveParent.PerformClick()); lbParents.ContextMenuStrip = cm;
             
-            // [事件] 添加/勾选/移除 都会触发加载逻辑
+            // [事件] 操作目录列表时，强制刷新(true)以更新缓存
             btnAddParent.Click += (_, __) => { using var fbd = new FolderBrowserDialog(); if (fbd.ShowDialog(this) == DialogResult.OK) { var path = fbd.SelectedPath.Trim(); if (!Directory.Exists(path)) return; if (!_settings.ParentPaths.Contains(path)) { _settings.ParentPaths.Add(path); _settings.Save(); } RefilterParentsList(); _ = LoadReposForCheckedParentsAsync(true); } }; 
             btnRemoveParent.Click += async (_, __) => { var rm = new List<string>(); foreach(var i in lbParents.SelectedItems) rm.Add(i.ToString()); foreach(var i in lbParents.CheckedItems) rm.Add(i.ToString()); foreach(var p in rm) { _settings.ParentPaths.Remove(p); _checkedParents.Remove(p); } _settings.Save(); RefilterParentsList(); await LoadReposForCheckedParentsAsync(false); };
             txtSearch.TextChanged += (_, __) => RefilterParentsList();
+            // 勾选变化时，传 false (读缓存)，除非你想每次勾选都重扫
             lbParents.ItemCheck += async (_, e) => { var p = lbParents.Items[e.Index].ToString(); BeginInvoke(new Action(async()=> { if(lbParents.GetItemChecked(e.Index)) _checkedParents.Add(p); else _checkedParents.Remove(p); await LoadReposForCheckedParentsAsync(false); })); };
             btnSelectAllParents.Click += async (_, __) => { _checkedParents = new HashSet<string>(_settings.ParentPaths); for(int i=0;i<lbParents.Items.Count;i++) lbParents.SetItemChecked(i,true); await LoadReposForCheckedParentsAsync(false); };
             btnClearParents.Click += async (_, __) => { _checkedParents.Clear(); for(int i=0;i<lbParents.Items.Count;i++) lbParents.SetItemChecked(i,false); await LoadReposForCheckedParentsAsync(false); };
@@ -132,10 +130,18 @@ namespace GitBranchSwitcher
             var btnRescan = new Button { Text = "🔄 刷新/重扫", AutoSize = true };
             btnRescan.Click += async (_, __) => await LoadReposForCheckedParentsAsync(true);
             repoToolbar.Controls.Add(btnR1); repoToolbar.Controls.Add(btnR2); repoToolbar.Controls.Add(btnR3); repoToolbar.Controls.Add(btnRescan);
+
 #if !BOSS_MODE
             var btnRank = new Button { Text = "🏆 排行榜", AutoSize = true, ForeColor = Color.DarkGoldenrod, Font = new Font(DefaultFont, FontStyle.Bold) };
-            btnRank.Click += (_, __) => ShowLeaderboard(); repoToolbar.Controls.Add(btnRank); 
+            btnRank.Click += (_, __) => ShowLeaderboard(); 
+            repoToolbar.Controls.Add(btnRank); 
 #endif
+
+            // [修改] 瘦身按钮放在外面，所有版本都可用
+            var btnSuperSlim = new Button { Text = "🔥 一键瘦身", AutoSize = true, ForeColor = Color.Red, Font = new Font(DefaultFont, FontStyle.Bold) };
+            btnSuperSlim.Click += (_, __) => StartSuperSlimProcess();
+            repoToolbar.Controls.Add(btnSuperSlim);
+
             btnR1.Click += (_,__) => { foreach(ListViewItem i in lvRepos.Items) i.Checked=false; }; btnR2.Click += (_,__) => { foreach(ListViewItem i in lvRepos.Items) i.Checked=true; }; btnR3.Click += (_,__) => { foreach(ListViewItem i in lvRepos.Items) i.Checked=false; };
             panelLeft = new Panel { Dock = DockStyle.Fill }; panelLeft.Controls.Add(lvRepos); panelLeft.Controls.Add(repoToolbar);
             pnlRight = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
@@ -169,7 +175,140 @@ namespace GitBranchSwitcher
             Controls.Add(splitMain); Controls.Add(tlTop); Controls.Add(statusStrip);
         }
 
-        // ... (TrySetRuntimeIcon, ApplyImageTo, LoadStateImagesRandom, SetSwitchState, SeedParentsToUi, RefilterParentsList, UpdateStatsUi, FormatDuration, ShowInputBox, ShowLeaderboard 保持不变) ...
+        // [核心修复] 按父节点结构加载
+        private async Task LoadReposForCheckedParentsAsync(bool forceRescan = false) {
+            _loadCts?.Cancel(); _loadCts = new System.Threading.CancellationTokenSource(); var token = _loadCts.Token; var seq = ++_loadSeq;
+            lvRepos.BeginUpdate(); lvRepos.Items.Clear(); lvRepos.EndUpdate(); _repos.Clear(); _allBranches.Clear(); cmbTargetBranch.Items.Clear();
+            var parents = _checkedParents.Where(Directory.Exists).ToList();
+            if(!parents.Any()) { statusLabel.Text="就绪"; SetSwitchState(SwitchState.NotStarted); return; }
+
+            // 临时结果
+            var finalRepos = new List<(string name, string path, string parent)>();
+            var tasksToScan = new List<string>();
+
+            // 1. 遍历父节点，优先读缓存
+            foreach (var p in parents) {
+                // 在 RepositoryCache 列表里找匹配的父节点
+                var cache = _settings.RepositoryCache.FirstOrDefault(x => string.Equals(x.ParentPath, p, StringComparison.OrdinalIgnoreCase));
+                
+                if (!forceRescan && cache != null && cache.Children.Count > 0) {
+                    // 命中缓存：直接取子节点
+                    foreach (var child in cache.Children) {
+                        if (Directory.Exists(child.FullPath)) 
+                            finalRepos.Add((child.Name, child.FullPath, Path.GetFileName(p)));
+                    }
+                } else {
+                    // 没缓存或强制刷新 -> 加入待扫描列表
+                    tasksToScan.Add(p);
+                }
+            }
+
+            // 2. 扫描（如果有需要的话）
+            if (tasksToScan.Count > 0) {
+                statusLabel.Text = $"正在扫描 {tasksToScan.Count} 个目录 (可能较慢)..."; statusProgress.Visible = true;
+                
+                var scannedResults = await Task.Run(() => {
+                    var dict = new Dictionary<string, List<SubRepoItem>>();
+                    foreach (var p in tasksToScan) {
+                        if (token.IsCancellationRequested) break;
+                        var gitPaths = GitHelper.ScanForGitRepositories(p);
+                        var items = new List<SubRepoItem>();
+                        foreach (var path in gitPaths) {
+                            string name = string.Equals(path, p, StringComparison.OrdinalIgnoreCase) ? "Root" : path.Substring(p.Length).TrimStart(Path.DirectorySeparatorChar);
+                            items.Add(new SubRepoItem { Name = name, FullPath = path });
+                        }
+                        dict[p] = items;
+                    }
+                    return dict;
+                });
+
+                if (token.IsCancellationRequested || seq != _loadSeq) { statusProgress.Visible = false; return; }
+
+                // 3. 更新缓存
+                foreach (var kvp in scannedResults) {
+                    // 移除旧缓存
+                    var old = _settings.RepositoryCache.FirstOrDefault(x => string.Equals(x.ParentPath, kvp.Key, StringComparison.OrdinalIgnoreCase));
+                    if (old != null) _settings.RepositoryCache.Remove(old);
+                    
+                    // 添加新缓存
+                    _settings.RepositoryCache.Add(new ParentRepoCache { ParentPath = kvp.Key, Children = kvp.Value });
+
+                    // 添加到本次结果
+                    foreach (var item in kvp.Value) finalRepos.Add((item.Name, item.FullPath, Path.GetFileName(kvp.Key)));
+                }
+                _settings.Save();
+            }
+
+            // 4. 显示
+            lvRepos.BeginUpdate();
+            var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, path, parentName) in finalRepos) {
+                if (seenPaths.Contains(path)) continue; seenPaths.Add(path);
+                var r = new GitRepo(name, path);
+                string display = name == "Root" ? $"[{parentName}] (根目录)" : $"[{parentName}] {name}";
+                lvRepos.Items.Add(new ListViewItem(new[] { "⏳", "—", display, path }) { Tag=r, Checked=true });
+            }
+            lvRepos.EndUpdate();
+
+            statusProgress.Visible = false; statusLabel.Text = $"加载完成，共 {lvRepos.Items.Count} 个仓库";
+            StartReadBranches(token);
+        }
+
+        // [新增] 一键瘦身执行逻辑
+        private async void StartSuperSlimProcess()
+        {
+            if (MessageBox.Show("【一键瘦身】将执行深度 GC，非常耗时。\n建议下班挂机执行。是否继续？", "确认 (1/2)", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            if (MessageBox.Show("CPU 将会满载。\n真的要继续吗？", "确认 (2/2)", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+
+            var selectedParents = ShowParentSelectionDialog();
+            if (selectedParents.Count == 0) return;
+
+            this.Enabled = false;
+            long totalSavedBytes = 0;
+            int totalRepos = 0;
+
+            foreach (var parent in selectedParents) {
+                // 从 RepositoryCache 查找父节点
+                var cache = _settings.RepositoryCache.FirstOrDefault(x => string.Equals(x.ParentPath, parent, StringComparison.OrdinalIgnoreCase));
+                if (cache == null || cache.Children.Count == 0) continue;
+
+                Log($"=== 清理父节点: {Path.GetFileName(parent)} ===");
+                
+                foreach (var repoInfo in cache.Children) {
+                    totalRepos++;
+                    Log($" >>> [清理中] {repoInfo.Name} ...");
+                    statusLabel.Text = $"正在瘦身: {repoInfo.Name}";
+                    // 调用 Helper，返回 bytesSaved
+                    var (ok, log, sizeStr, saved) = await Task.Run(() => GitHelper.GarbageCollect(repoInfo.FullPath, true));
+                    if (ok) { totalSavedBytes += saved; Log($"[成功] {repoInfo.Name}: 减小 {sizeStr}"); }
+                    else { Log($"[失败] {repoInfo.Name}"); }
+                }
+            }
+
+            this.Enabled = true; statusLabel.Text = "清理完成";
+            
+            // 上报瘦身数据
+#if !BOSS_MODE
+            if(!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                var stats = await LeaderboardService.UploadMyScoreAsync(0, totalSavedBytes);
+                UpdateStatsUi(stats.totalCount, stats.totalTime, stats.totalSpace);
+            }
+#endif
+            MessageBox.Show($"🎉 清理完毕！\n节省空间: {FormatSize(totalSavedBytes)}", "完成");
+        }
+
+        private List<string> ShowParentSelectionDialog() {
+            var form = new Form { Text = "选择要清理的目录", Width = 400, Height = 300, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false };
+            var clb = new CheckedListBox { Top = 10, Left = 10, Width = 360, Height = 200, CheckOnClick = true };
+            var btnOk = new Button { Text = "开始", Top = 220, Left = 150, DialogResult = DialogResult.OK };
+            foreach (var p in _settings.ParentPaths) clb.Items.Add(p, true);
+            form.Controls.Add(clb); form.Controls.Add(btnOk); form.AcceptButton = btnOk;
+            if (form.ShowDialog() == DialogResult.OK) { var r = new List<string>(); foreach (var i in clb.CheckedItems) r.Add(i.ToString()); return r; }
+            return new List<string>();
+        }
+
+        // ... (TrySetRuntimeIcon, ApplyImageTo, LoadStateImagesRandom, SetSwitchState, SeedParentsToUi, RefilterParentsList, UpdateStatsUi, FormatDuration, FormatSize, ShowInputBox, ShowLeaderboard, StartReadBranches, RefreshBranchesAsync, UpdateBranchDropdown, SwitchAllAsync, Log 保持不变) ...
+        // 请保留其他所有未修改的方法
         private void TrySetRuntimeIcon() { try { var icon = ImageHelper.LoadIconFromResource("appicon"); if (icon != null) this.Icon = icon; } catch { } }
         private void ApplyImageTo(PictureBox pb, string key, int s) { 
 #if BOSS_MODE
@@ -182,133 +321,28 @@ namespace GitBranchSwitcher
         private void SetSwitchState(SwitchState st) { if (st == SwitchState.NotStarted) { ApplyImageTo(pbState, "state_notstarted", TARGET_BOX); lblStateText.Text = "未开始"; } if (st == SwitchState.Switching) { ApplyImageTo(pbState, "state_switching", TARGET_BOX); lblStateText.Text = "切线中..."; } if (st == SwitchState.Done) { ApplyImageTo(pbState, "state_done", TARGET_BOX); lblStateText.Text = "搞定!"; } }
         private void SeedParentsToUi() { if(lbParents==null) return; lbParents.BeginUpdate(); lbParents.Items.Clear(); foreach(var p in _settings.ParentPaths) { int i=lbParents.Items.Add(p); if(_checkedParents.Contains(p)) lbParents.SetItemChecked(i,true); } lbParents.EndUpdate(); }
         private void RefilterParentsList() { lbParents.BeginUpdate(); lbParents.Items.Clear(); var kw=txtSearch.Text.Trim(); foreach(var p in _settings.ParentPaths) { if(string.IsNullOrEmpty(kw)||p.IndexOf(kw,StringComparison.OrdinalIgnoreCase)>=0) { int i=lbParents.Items.Add(p); if(_checkedParents.Contains(p)) lbParents.SetItemChecked(i,true); } } lbParents.EndUpdate(); }
-        private void UpdateStatsUi(int totalCount = -1, double totalSeconds = -1) { if (statusStats != null) { int c = totalCount >= 0 ? totalCount : _settings.TodaySwitchCount; double t = totalSeconds >= 0 ? totalSeconds : _settings.TodayTotalSeconds; statusStats.Text = $"📅 我的累计：切线 {c} 次 | 摸鱼总时长 {FormatDuration(t)}"; } }
+        private void UpdateStatsUi(int totalCount = -1, double totalSeconds = -1, long totalSpace = -1) { if (statusStats != null) { int c = totalCount >= 0 ? totalCount : _settings.TodaySwitchCount; double t = totalSeconds >= 0 ? totalSeconds : _settings.TodayTotalSeconds; long s = totalSpace >= 0 ? totalSpace : 0; statusStats.Text = $"📅 累计：切线 {c} 次 | 摸鱼 {FormatDuration(t)} | 瘦身 {FormatSize(s)}"; } }
         private string FormatDuration(double seconds) { var ts = TimeSpan.FromSeconds(seconds); if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}小时{ts.Minutes}分{ts.Seconds}秒"; if (ts.TotalMinutes >= 1) return $"{ts.Minutes}分{ts.Seconds}秒"; return $"{ts.Seconds}秒"; }
+        private string FormatSize(long bytes) { string[] suffixes = { "B", "KB", "MB", "GB", "TB" }; int counter = 0; decimal number = (decimal)bytes; while (Math.Round(number / 1024) >= 1) { number = number / 1024; counter++; } return string.Format("{0:n1}{1}", number, suffixes[counter]); }
         private string ShowInputBox(string title, string prompt, string defaultVal) { Form promptForm = new Form() { Width = 500, Height = 150, FormBorderStyle = FormBorderStyle.FixedDialog, Text = title, StartPosition = FormStartPosition.CenterParent }; Label textLabel = new Label() { Left = 20, Top = 20, Text = prompt, AutoSize = true }; TextBox textBox = new TextBox() { Left = 20, Top = 50, Width = 440, Text = defaultVal }; Button confirmation = new Button() { Text = "确定", Left = 360, Width = 100, Top = 80, DialogResult = DialogResult.OK }; promptForm.Controls.Add(textLabel); promptForm.Controls.Add(textBox); promptForm.Controls.Add(confirmation); promptForm.AcceptButton = confirmation; return promptForm.ShowDialog() == DialogResult.OK ? textBox.Text : ""; }
         private async void ShowLeaderboard() {
             if (string.IsNullOrEmpty(_settings.LeaderboardPath)) { string input = ShowInputBox("设置", "请输入共享文件路径:", _settings.LeaderboardPath); if (string.IsNullOrWhiteSpace(input)) return; _settings.LeaderboardPath = input; _settings.Save(); LeaderboardService.SetPath(input); }
-            var form = new Form { Text = "👑 卷王 & 摸鱼王 排行榜", Width = 940, Height = 493, StartPosition = FormStartPosition.CenterParent };
-            var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterDistance = 465 };
-            var listCount = new ListView { Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true };
-            listCount.Columns.Add("排名", 50); listCount.Columns.Add("用户", 250); listCount.Columns.Add("切线次数", 100);
-            var listDuration = new ListView { Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true };
-            listDuration.Columns.Add("排名", 50); listDuration.Columns.Add("用户", 250); listDuration.Columns.Add("摸鱼总时长", 130);
+            var form = new Form { Text = "👑 卷王 & 摸鱼王 & 瘦身王 排行榜", Width = 1000, Height = 500, StartPosition = FormStartPosition.CenterParent };
+            var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1 }; table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33)); table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33)); table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+            var listCount = new ListView { Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true }; listCount.Columns.Add("排名", 40); listCount.Columns.Add("用户", 180); listCount.Columns.Add("次数", 60);
+            var listDuration = new ListView { Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true }; listDuration.Columns.Add("排名", 40); listDuration.Columns.Add("用户", 180); listDuration.Columns.Add("时长", 80);
+            var listSpace = new ListView { Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true }; listSpace.Columns.Add("排名", 40); listSpace.Columns.Add("用户", 180); listSpace.Columns.Add("瘦身", 80);
+            table.Controls.Add(listCount, 0, 0); table.Controls.Add(listDuration, 1, 0); table.Controls.Add(listSpace, 2, 0);
             var lblMy = new Label { Dock = DockStyle.Bottom, Height = 40, TextAlign = ContentAlignment.MiddleCenter, Font = new Font(DefaultFont, FontStyle.Bold), Text = "正在加载数据..." };
-            split.Panel1.Controls.Add(listCount); split.Panel2.Controls.Add(listDuration); form.Controls.Add(split); form.Controls.Add(lblMy);
+            form.Controls.Add(table); form.Controls.Add(lblMy);
             form.Shown += async (_, __) => {
                 var data = await LeaderboardService.GetLeaderboardAsync();
-                var sortedCount = data.OrderByDescending(x => x.TotalSwitches).ToList();
-                for (int i = 0; i < sortedCount.Count; i++) { var u = sortedCount[i]; var icon = i == 0 ? "🥇" : (i == 1 ? "🥈" : (i == 2 ? "🥉" : "")); string name = $"{icon} {u.Name}"; if (i == 0) name += " (🌭香肠切线王)"; listCount.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), name, u.TotalSwitches.ToString() })); }
-                var sortedTime = data.OrderByDescending(x => x.TotalDuration).ToList();
-                for (int i = 0; i < sortedTime.Count; i++) { var u = sortedTime[i]; var icon = i == 0 ? "👑" : (i == 1 ? "🥈" : (i == 2 ? "🥉" : "")); string name = $"{icon} {u.Name}"; if (i == 0) name += " (🐟香肠摸鱼王)"; listDuration.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), name, FormatDuration(u.TotalDuration) })); }
-                var me = data.FirstOrDefault(x => x.Name == Environment.UserName);
-                if (me != null) { int r1 = sortedCount.IndexOf(me) + 1; int r2 = sortedTime.IndexOf(me) + 1; lblMy.Text = $"我 ({me.Name})：切线 {me.TotalSwitches} 次 (第{r1}名) | 摸鱼总时长 {FormatDuration(me.TotalDuration)} (第{r2}名)"; } else { lblMy.Text = "暂无数据"; }
+                var sortedCount = data.OrderByDescending(x => x.TotalSwitches).ToList(); for (int i = 0; i < sortedCount.Count; i++) { var u = sortedCount[i]; string name = u.Name; if (i == 0) name = $"🥇 {u.Name} (🌭切线王)"; else if (i==1) name = $"🥈 {u.Name}"; else if(i==2) name=$"🥉 {u.Name}"; listCount.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), name, u.TotalSwitches.ToString() })); }
+                var sortedTime = data.OrderByDescending(x => x.TotalDuration).ToList(); for (int i = 0; i < sortedTime.Count; i++) { var u = sortedTime[i]; string name = u.Name; if (i == 0) name = $"👑 {u.Name} (🐟摸鱼王)"; else if (i==1) name = $"🥈 {u.Name}"; else if(i==2) name=$"🥉 {u.Name}"; listDuration.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), name, FormatDuration(u.TotalDuration) })); }
+                var sortedSpace = data.OrderByDescending(x => x.TotalSpaceCleaned).ToList(); for (int i = 0; i < sortedSpace.Count; i++) { var u = sortedSpace[i]; string name = u.Name; if (i == 0) name = $"💪 {u.Name} (🥦瘦身王)"; else if (i==1) name = $"🥈 {u.Name}"; else if(i==2) name=$"🥉 {u.Name}"; listSpace.Items.Add(new ListViewItem(new[] { (i + 1).ToString(), name, FormatSize(u.TotalSpaceCleaned) })); }
+                var me = data.FirstOrDefault(x => x.Name == Environment.UserName); if (me != null) { lblMy.Text = $"我：切线{me.TotalSwitches}次 | 摸鱼{FormatDuration(me.TotalDuration)} | 瘦身{FormatSize(me.TotalSpaceCleaned)}"; } else { lblMy.Text = "暂无数据"; }
             };
             form.ShowDialog(this);
-        }
-
-        // [核心修改]：根据父节点加载子节点
-        private async Task LoadReposForCheckedParentsAsync(bool forceRescan = false) {
-            _loadCts?.Cancel(); _loadCts = new System.Threading.CancellationTokenSource(); var token = _loadCts.Token; var seq = ++_loadSeq;
-            
-            lvRepos.BeginUpdate(); lvRepos.Items.Clear(); lvRepos.EndUpdate(); 
-            _repos.Clear(); _allBranches.Clear(); cmbTargetBranch.Items.Clear();
-
-            var parents = _checkedParents.Where(Directory.Exists).ToList();
-            if(!parents.Any()) { statusLabel.Text="就绪"; SetSwitchState(SwitchState.NotStarted); return; }
-
-            // 临时集合，用于收集结果
-            var finalRepos = new List<(string name, string path, string parent)>();
-            var tasksToScan = new List<string>();
-
-            // 1. 遍历每个勾选的父节点
-            foreach (var p in parents)
-            {
-                // 尝试从缓存获取
-                var cache = _settings.RepositoryCache.FirstOrDefault(x => string.Equals(x.ParentPath, p, StringComparison.OrdinalIgnoreCase));
-                
-                if (!forceRescan && cache != null && cache.Children != null && cache.Children.Count > 0)
-                {
-                    // 命中缓存：直接添加
-                    foreach (var child in cache.Children)
-                    {
-                        // 校验路径是否存在 (防止缓存过期)
-                        if (Directory.Exists(child.FullPath))
-                        {
-                            finalRepos.Add((child.Name, child.FullPath, Path.GetFileName(p)));
-                        }
-                    }
-                }
-                else
-                {
-                    // 未命中或强制刷新：加入待扫描队列
-                    tasksToScan.Add(p);
-                }
-            }
-
-            // 2. 如果有需要扫描的，在后台扫描
-            if (tasksToScan.Count > 0)
-            {
-                statusLabel.Text = $"正在扫描 {tasksToScan.Count} 个新目录 (跳过 Library)...";
-                statusProgress.Visible = true;
-
-                var scannedResults = await Task.Run(() => {
-                    var dict = new Dictionary<string, List<SubRepoItem>>();
-                    foreach (var p in tasksToScan)
-                    {
-                        if (token.IsCancellationRequested) break;
-                        var gitPaths = GitHelper.ScanForGitRepositories(p);
-                        var items = new List<SubRepoItem>();
-                        foreach (var path in gitPaths)
-                        {
-                            string name = string.Equals(path, p, StringComparison.OrdinalIgnoreCase) ? "Root" : path.Substring(p.Length).TrimStart(Path.DirectorySeparatorChar);
-                            items.Add(new SubRepoItem { Name = name, FullPath = path });
-                        }
-                        dict[p] = items;
-                    }
-                    return dict;
-                });
-
-                if (token.IsCancellationRequested || seq != _loadSeq) { statusProgress.Visible = false; return; }
-
-                // 3. 更新缓存并合并结果
-                foreach (var kvp in scannedResults)
-                {
-                    // 更新 AppSettings 里的缓存
-                    var existing = _settings.RepositoryCache.FirstOrDefault(x => string.Equals(x.ParentPath, kvp.Key, StringComparison.OrdinalIgnoreCase));
-                    if (existing != null) _settings.RepositoryCache.Remove(existing);
-                    
-                    _settings.RepositoryCache.Add(new ParentRepoCache { ParentPath = kvp.Key, Children = kvp.Value });
-
-                    // 添加到本次显示列表
-                    foreach (var item in kvp.Value)
-                    {
-                        finalRepos.Add((item.Name, item.FullPath, Path.GetFileName(kvp.Key)));
-                    }
-                }
-                _settings.Save(); // 保存缓存到硬盘
-            }
-
-            // 4. 渲染 ListView
-            lvRepos.BeginUpdate();
-            // 去重 (防止父子嵌套导致的重复)
-            var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (name, path, parentName) in finalRepos)
-            {
-                if (seenPaths.Contains(path)) continue;
-                seenPaths.Add(path);
-
-                var r = new GitRepo(name, path);
-                string display = $"[{parentName}] {name}";
-                if (name == "Root") display = $"[{parentName}] (根目录)";
-                lvRepos.Items.Add(new ListViewItem(new[] { "⏳", "—", display, path }) { Tag=r, Checked=true });
-            }
-            lvRepos.EndUpdate();
-
-            statusProgress.Visible = false; 
-            statusLabel.Text = $"加载完成，共 {lvRepos.Items.Count} 个仓库";
-            
-            StartReadBranches(token);
         }
 
         private void StartReadBranches(System.Threading.CancellationToken token) {
@@ -340,14 +374,11 @@ namespace GitBranchSwitcher
                 foreach (var list in results) if (list != null) foreach (var b in list) all.Add(b);
             } catch (Exception ex) { Log($"⚠️ 读取分支列表出错: {ex.Message}"); }
             _allBranches = all.OrderBy(x => x).ToList();
-            
-            // 保存分支缓存
             if (_allBranches.Count > 0) {
                 if (_settings.CachedBranchList == null) _settings.CachedBranchList = new List<string>();
                 _settings.CachedBranchList = _allBranches;
                 _settings.Save();
             }
-
             if (cmbTargetBranch != null && !cmbTargetBranch.IsDisposed) UpdateBranchDropdown();
             if (statusLabel != null) statusLabel.Text = "就绪";
         }
@@ -395,7 +426,6 @@ namespace GitBranchSwitcher
                         item.Text = (r.SwitchOk?"✅":"❌") + $" {sw.Elapsed.TotalSeconds:F1}s";
                         item.SubItems[1].Text = r.CurrentBranch;
                         Log($"[{r.Name}] {r.LastMessage?.Replace("\n"," ")}");
-                        
 #if !BOSS_MODE
                         if(r.SwitchOk) { ApplyImageTo(pbFlash,"flash_success",FLASH_BOX); pbFlash.Visible=true; flashTimer.Start(); }
 #endif
@@ -408,8 +438,8 @@ namespace GitBranchSwitcher
 
 #if !BOSS_MODE
             if(!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                var (newCount, newTime) = await LeaderboardService.UploadMyScoreAsync(batchSw.Elapsed.TotalSeconds);
-                UpdateStatsUi(newCount, newTime);
+                var (newCount, newTime, newSpace) = await LeaderboardService.UploadMyScoreAsync(batchSw.Elapsed.TotalSeconds, 0);
+                UpdateStatsUi(newCount, newTime, newSpace);
             }
 #endif
 
