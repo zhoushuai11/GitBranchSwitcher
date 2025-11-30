@@ -72,9 +72,9 @@ namespace GitBranchSwitcher
                 _allBranches = new List<string>(_settings.CachedBranchList);
                 UpdateBranchDropdown();
             }
-
-            // [启动] 传入 false，优先读缓存
-            _ = LoadReposForCheckedParentsAsync(false); 
+            // true = 强制刷新（扫描硬盘）
+            // false = 优先读缓存
+            _ = LoadReposForCheckedParentsAsync(true);
         }
 
         // ... (保持 InitMyStatsAsync, InitializeComponent, InitUi 等代码不变) ...
