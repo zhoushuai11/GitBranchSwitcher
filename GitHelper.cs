@@ -9,72 +9,210 @@ namespace GitBranchSwitcher
 {
     public static class GitHelper
     {
-        public static string? FindGitRoot(string startPath) { var dir = new DirectoryInfo(startPath); while (dir != null) { var gitDir = Path.Combine(dir.FullName, ".git"); if (Directory.Exists(gitDir) || File.Exists(gitDir)) return dir.FullName; dir = dir.Parent; } return null; }
-        public static string GetFriendlyBranch(string repoPath) { { var (c, s, _) = RunGit(repoPath, "branch --show-current", 15000); if (c == 0 && !string.IsNullOrWhiteSpace(s)) return s.Trim(); } { var (c, s, _) = RunGit(repoPath, "rev-parse --abbrev-ref HEAD", 15000); if (c == 0 && !string.IsNullOrWhiteSpace(s) && s.Trim() != "HEAD") return s.Trim(); } { var (c, s, _) = RunGit(repoPath, "rev-parse --short=7 HEAD", 15000); if (c == 0 && !string.IsNullOrWhiteSpace(s)) return $"(detached @{s.Trim()})"; } return "(unknown)"; }
-        public static IEnumerable<string> GetAllBranches(string repoPath) { var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase); { var (code, stdout, _) = RunGit(repoPath, "for-each-ref --format=%(refname:short) refs/heads", 20000); if (code == 0) foreach (var l in stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) set.Add(l.Trim()); } { var (code, stdout, _) = RunGit(repoPath, "for-each-ref --format=%(refname:short) refs/remotes/origin", 20000); if (code == 0) foreach (var l in stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) { var name = l.Trim(); if (name.EndsWith("/HEAD", StringComparison.OrdinalIgnoreCase)) continue; var idx = name.IndexOf('/'); set.Add(idx >= 0 ? name[(idx + 1)..] : name); }} return set; }
-        private static bool HasLocalChanges(string repoPath) { var (code, stdout, _) = RunGit(repoPath, "status --porcelain", 15000); return code == 0 && !string.IsNullOrWhiteSpace(stdout); }
-        
-        public static (bool ok, string message) SwitchAndPull(string repoPath, string targetBranch, bool useStash, bool fastMode) {
-             var log = new StringBuilder();
-             void Step(string s) => log.AppendLine(s);
-             if (fastMode) { Step("> [Fast] Skip Fetch"); } 
-             else { var r=RunGit(repoPath, $"fetch origin {targetBranch} --no-tags --prune --no-progress", 60000); if(r.code!=0) RunGit(repoPath, "fetch --all --tags --prune --no-progress", 180000); }
-             bool stashed=false;
-             if(useStash){ if(HasLocalChanges(repoPath)){ var r=RunGit(repoPath,"stash push -u -m \"GitBranchSwitcher\"",120000); if(r.code!=0) return(false,r.stderr); stashed=true; } }
-             else { RunGit(repoPath,"reset --hard",60000); if(!fastMode) RunGit(repoPath,"clean -fd",60000); }
-             if(RunGit(repoPath,$"show-ref --verify --quiet refs/heads/{targetBranch}",20000).code==0) RunGit(repoPath,$"checkout -f \"{targetBranch}\"",90000);
-             else { if(fastMode && RunGit(repoPath,$"fetch origin {targetBranch}",60000).code!=0){} if(RunGit(repoPath,$"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"",120000).code!=0) return(false,"Checkout failed"); }
-             if(!fastMode) RunGit(repoPath,"pull --ff-only",120000);
-             if(useStash&&stashed) RunGit(repoPath,"stash pop --index",180000);
-             return (true, "OK");
+        // ==================== 基础辅助方法 ====================
+
+        public static string? FindGitRoot(string startPath)
+        {
+            var dir = new DirectoryInfo(startPath);
+            while (dir != null)
+            {
+                var gitDir = Path.Combine(dir.FullName, ".git");
+                if (Directory.Exists(gitDir) || File.Exists(gitDir)) return dir.FullName;
+                dir = dir.Parent;
+            }
+            return null;
         }
 
-        public static (bool ok, string log) RepairRepo(string repoPath) {
+        public static string GetFriendlyBranch(string repoPath)
+        {
+            { var (c, s, _) = RunGit(repoPath, "branch --show-current", 15000); if (c == 0 && !string.IsNullOrWhiteSpace(s)) return s.Trim(); }
+            { var (c, s, _) = RunGit(repoPath, "rev-parse --abbrev-ref HEAD", 15000); if (c == 0 && !string.IsNullOrWhiteSpace(s) && s.Trim() != "HEAD") return s.Trim(); }
+            { var (c, s, _) = RunGit(repoPath, "rev-parse --short=7 HEAD", 15000); if (c == 0 && !string.IsNullOrWhiteSpace(s)) return $"(detached @{s.Trim()})"; }
+            return "(unknown)";
+        }
+
+        public static IEnumerable<string> GetAllBranches(string repoPath)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // 本地分支
+            {
+                var (code, stdout, _) = RunGit(repoPath, "for-each-ref --format=%(refname:short) refs/heads", 20000);
+                if (code == 0) foreach (var l in stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) set.Add(l.Trim());
+            }
+            // 远程分支
+            {
+                var (code, stdout, _) = RunGit(repoPath, "for-each-ref --format=%(refname:short) refs/remotes/origin", 20000);
+                if (code == 0) foreach (var l in stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var name = l.Trim();
+                        if (name.EndsWith("/HEAD", StringComparison.OrdinalIgnoreCase)) continue;
+                        var idx = name.IndexOf('/');
+                        set.Add(idx >= 0 ? name[(idx + 1)..] : name);
+                    }
+            }
+            return set;
+        }
+
+        private static bool HasLocalChanges(string repoPath)
+        {
+            var (code, stdout, _) = RunGit(repoPath, "status --porcelain", 15000);
+            return code == 0 && !string.IsNullOrWhiteSpace(stdout);
+        }
+
+        // ==================== 核心切线逻辑 ====================
+
+        public static (bool ok, string message) SwitchAndPull(string repoPath, string targetBranch, bool useStash, bool fastMode)
+        {
             var log = new StringBuilder();
-            string gitDir = Path.Combine(repoPath, ".git");
-            if (!Directory.Exists(gitDir)) return (false, "找不到 .git");
-            var locks = Directory.GetFiles(gitDir, "*.lock", SearchOption.AllDirectories);
-            foreach(var f in locks) { try{ File.Delete(f); log.AppendLine($"Deleted {Path.GetFileName(f)}"); }catch{} }
-            var r = RunGit(repoPath, "fsck --full --no-progress", -1); // 修复也无限等待
-            return (true, log.ToString() + "\n" + (r.code==0?"Healthy":r.stdout+r.stderr));
+            void Step(string s) => log.AppendLine(s);
+
+            // 1. 网络操作 (Fetch)
+            if (fastMode)
+            {
+                Step("> [极速模式] 跳过 Fetch");
+            }
+            else
+            {
+                Step($"> 尝试极速拉取: origin {targetBranch}...");
+                // 优先拉取单分支
+                var fetchRes = RunGit(repoPath, $"fetch origin {targetBranch} --no-tags --prune --no-progress", 60_000);
+                if (fetchRes.code != 0)
+                {
+                    Step($"⚠️ 极速拉取失败 ({fetchRes.stderr?.Trim()}), 尝试全量拉取...");
+                    RunGit(repoPath, $"fetch --all --tags --prune --no-progress", 180_000);
+                }
+            }
+
+            // 2. 本地修改处理 (Working Tree)
+            bool stashed = false;
+            if (useStash)
+            {
+                if (HasLocalChanges(repoPath))
+                {
+                    Step($"> stash push...");
+                    var (cs, ss, es) = RunGit(repoPath, "stash push -u -m \"GitBranchSwitcher-auto\"", 120_000);
+                    if (cs != 0) return (false, log.AppendLine($"❌ Stash失败: {es}").ToString());
+                    stashed = true;
+                }
+            }
+            else
+            {
+                // 强制模式：丢弃工作区修改
+                Step($"> 强制清理工作区 (clean)...");
+                RunGit(repoPath, "reset --hard", 60_000);
+                if (!fastMode) RunGit(repoPath, "clean -fd", 60_000);
+            }
+
+            // 3. 检查与切换 (Switch/Checkout)
+            bool localExists = RunGit(repoPath, $"show-ref --verify --quiet refs/heads/{targetBranch}", 20_000).code == 0;
+            if (localExists)
+            {
+                Step($"> checkout -f \"{targetBranch}\"");
+                var (c1, s1, e1) = RunGit(repoPath, $"checkout -f \"{targetBranch}\"", 90_000);
+                if (c1 != 0) return (false, log.AppendLine($"checkout 失败: {e1}").ToString());
+            }
+            else
+            {
+                if (fastMode) RunGit(repoPath, $"fetch origin {targetBranch} --no-tags", 60_000);
+
+                bool remoteExists = RunGit(repoPath, $"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
+                if (!remoteExists) return (false, log.AppendLine($"❌ 分支不存在: {targetBranch}").ToString());
+
+                if (!useStash) RunGit(repoPath, "reset --hard", 60_000);
+
+                Step($"> checkout -B (new track)");
+                var (c2, s2, e2) = RunGit(repoPath, $"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"", 120_000);
+                if (c2 != 0) return (false, log.AppendLine($"创建分支失败: {e2}").ToString());
+            }
+
+            // 4. 同步远程代码 (Pull / Reset) - [本次核心修复位置]
+            if (!fastMode)
+            {
+                // 检查远程分支是否存在 (防止本地有分支但远程没有的情况报错)
+                bool remoteTrackingExists = RunGit(repoPath, $"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
+
+                if (remoteTrackingExists)
+                {
+                    if (!useStash)
+                    {
+                        // [Force Mode]: 强制 Reset 到远程状态，丢弃本地所有未推送的 Commits
+                        Step($"> [强制模式] Reset to origin/{targetBranch}...");
+                        var (cr, sr, er) = RunGit(repoPath, $"reset --hard origin/{targetBranch}", 60_000);
+                        if (cr != 0) return (false, log.AppendLine($"❌ 强制同步失败: {er}").ToString());
+                    }
+                    else
+                    {
+                        // [Safe Mode]: 尝试快进合并
+                        Step($"> 尝试同步 (Fast-forward)...");
+                        var (cm, sm, em) = RunGit(repoPath, $"merge --ff-only origin/{targetBranch}", 60_000);
+                        
+                        if (cm != 0)
+                        {
+                            // 失败时明确报错，不强行合并
+                            log.AppendLine($"❌ 同步失败: 本地分支与远程分叉，无法快进 (Diverged)。");
+                            log.AppendLine($"原因: {em}");
+                            if (stashed) log.AppendLine("⚠️ 提示: 您的工作区修改已 Stash，但代码拉取失败。");
+                            return (false, log.ToString());
+                        }
+                    }
+                }
+                else
+                {
+                    Step("> 远程无此分支引用，跳过 Pull。");
+                }
+            }
+            else
+            {
+                Step($"> [极速模式] 跳过 Pull");
+            }
+
+            // 5. Stash Pop
+            if (useStash && stashed)
+            {
+                Step($"> stash pop");
+                var (cp, sp, ep) = RunGit(repoPath, "stash pop --index", 180_000);
+                if (cp != 0)
+                {
+                    log.AppendLine($"⚠️ Stash Pop 冲突: 请手动处理。");
+                    return (false, log.ToString());
+                }
+            }
+
+            return (true, log.AppendLine($"OK").ToString());
         }
 
-        // ==================== GC 逻辑 (无超时) ====================
+        // ==================== 仓库瘦身 (GC) 逻辑 ====================
 
         public static (bool ok, string log, string sizeInfo) GarbageCollect(string repoPath, bool aggressive)
         {
             var log = new StringBuilder();
             void Step(string s) => log.AppendLine(s);
 
-            // 1. 计算清理前大小
             string gitDir = Path.Combine(repoPath, ".git");
             long sizeBefore = GetDirectorySize(gitDir);
             Step($"初始大小: {FormatSize(sizeBefore)}");
 
-            // 2. 执行清理
             Step("> Prune remote origin...");
             RunGit(repoPath, "remote prune origin", 60_000);
 
             string args;
-            
             if (aggressive)
             {
-                Step("> 🚀 深度清理 (--aggressive)... 正在执行，请耐心等待直到完成（不限时）");
+                Step("> 🚀 深度清理 (--aggressive)... 请耐心等待 (无限时)");
                 args = "gc --prune=now --aggressive";
             }
             else
             {
-                Step("> 🧹 快速清理... 正在执行（不限时）");
+                Step("> 🧹 快速清理... 请耐心等待");
                 args = "gc --prune=now";
             }
 
-            // [关键修改] timeoutMs 设为 -1，表示无限等待，直到 git.exe 自己结束
+            // GC 无限超时
             var (code, stdout, stderr) = RunGit(repoPath, args, -1);
 
-            if (code != 0) 
+            if (code != 0)
                 return (false, log.AppendLine($"❌ 失败: {stderr}").ToString(), "无变化");
 
-            // 3. 计算清理后大小
             long sizeAfter = GetDirectorySize(gitDir);
             long saved = sizeBefore - sizeAfter;
             if (saved < 0) saved = 0;
@@ -85,10 +223,27 @@ namespace GitBranchSwitcher
             return (true, log.ToString(), FormatSize(saved));
         }
 
-        private static long GetDirectorySize(string path) {
+        // ==================== 修复逻辑 ====================
+
+        public static (bool ok, string log) RepairRepo(string repoPath)
+        {
+            var log = new StringBuilder();
+            string gitDir = Path.Combine(repoPath, ".git");
+            if (!Directory.Exists(gitDir)) return (false, "找不到 .git");
+            var locks = Directory.GetFiles(gitDir, "*.lock", SearchOption.AllDirectories);
+            foreach (var f in locks) { try { File.Delete(f); log.AppendLine($"Deleted {Path.GetFileName(f)}"); } catch { } }
+            var r = RunGit(repoPath, "fsck --full --no-progress", -1);
+            return (true, log.ToString() + "\n" + (r.code == 0 ? "Healthy" : r.stdout + r.stderr));
+        }
+
+        // ==================== 底层工具 ====================
+
+        private static long GetDirectorySize(string path)
+        {
             try { if (!Directory.Exists(path)) return 0; return new DirectoryInfo(path).EnumerateFiles("*", SearchOption.AllDirectories).Sum(fi => fi.Length); } catch { return 0; }
         }
-        private static string FormatSize(long bytes) {
+        private static string FormatSize(long bytes)
+        {
             string[] suffixes = { "B", "KB", "MB", "GB", "TB" }; int counter = 0; decimal number = (decimal)bytes;
             while (Math.Round(number / 1024) >= 1) { number = number / 1024; counter++; }
             return string.Format("{0:n1}{1}", number, suffixes[counter]);
@@ -98,30 +253,36 @@ namespace GitBranchSwitcher
         {
             var stdoutSb = new StringBuilder(); var stderrSb = new StringBuilder();
             string safeArgs = $"-c core.quotepath=false -c credential.helper= {args}";
-            var psi = new ProcessStartInfo {
-                FileName = "git", Arguments = safeArgs, WorkingDirectory = workingDir,
-                UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
-                CreateNoWindow = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = safeArgs,
+                WorkingDirectory = workingDir,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
             };
             psi.Environment["GIT_TERMINAL_PROMPT"] = "0"; psi.Environment["GCM_INTERACTIVE"] = "Never"; psi.Environment["GIT_ASKPASS"] = "echo";
 
-            try {
+            try
+            {
                 using var p = new Process(); p.StartInfo = psi;
                 var outWait = new System.Threading.ManualResetEvent(false); var errWait = new System.Threading.ManualResetEvent(false);
                 p.OutputDataReceived += (_, e) => { if (e.Data == null) outWait.Set(); else stdoutSb.AppendLine(e.Data); };
-                p.ErrorDataReceived  += (_, e) => { if (e.Data == null) errWait.Set(); else stderrSb.AppendLine(e.Data); };
+                p.ErrorDataReceived += (_, e) => { if (e.Data == null) errWait.Set(); else stderrSb.AppendLine(e.Data); };
                 if (!p.Start()) return (-1, "", "Git无法启动");
                 p.BeginOutputReadLine(); p.BeginErrorReadLine();
 
-                // [关键逻辑] 处理 -1 无限等待
-                if (timeoutMs < 0) {
-                    p.WaitForExit(); 
-                } else {
-                    if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } return (-2, stdoutSb.ToString(), $"超时(>{timeoutMs/1000}s)"); }
-                }
+                if (timeoutMs < 0) { p.WaitForExit(); }
+                else { if (!p.WaitForExit(timeoutMs)) { try { p.Kill(true); } catch { } return (-2, stdoutSb.ToString(), $"超时(>{timeoutMs / 1000}s)"); } }
+                
                 outWait.WaitOne(5000); errWait.WaitOne(5000);
                 return (p.ExitCode, stdoutSb.ToString(), stderrSb.ToString());
-            } catch (Exception ex) { return (-3, "", ex.Message); }
+            }
+            catch (Exception ex) { return (-3, "", ex.Message); }
         }
     }
 }
