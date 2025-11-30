@@ -6,6 +6,14 @@ using System.Text.Json;
 
 namespace GitBranchSwitcher
 {
+    // [新增] 简单的缓存结构
+    public class RepoCacheItem
+    {
+        public string Name { get; set; } = "";
+        public string Path { get; set; } = "";
+        public string ParentName { get; set; } = "";
+    }
+
     public class AppSettings
     {
         public bool StashOnSwitch { get; set; } = true;
@@ -13,25 +21,13 @@ namespace GitBranchSwitcher
         public int MaxParallel { get; set; } = 16;
         public List<string> ParentPaths { get; set; } = new List<string>();
 
-        public List<string> SubDirectoriesToScan { get; set; } = new List<string>
-        {
-            "", 
-            "Assets/ToBundle",
-            "Assets/Script",
-            "Assets/Script/Biubiubiu2", 
-            "Assets/Art",
-            "Assets/Scenes",
-            "Library/ConfigCache",
-            "Assets/Audio"
-        };
+        // [新增] 缓存扫描结果，下次启动直接用
+        public List<RepoCacheItem> CachedRepos { get; set; } = new List<RepoCacheItem>();
 
-        // 统计字段
+        // 统计
         public DateTime LastStatDate { get; set; } = DateTime.MinValue; 
         public int TodaySwitchCount { get; set; } = 0;                  
         public double TodayTotalSeconds { get; set; } = 0;              
-
-        // [修改] 在这里填入你的共享路径，作为默认值
-        // 注意前面的 @ 符号，和双反斜杠
         public string LeaderboardPath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData\rank.json"; 
 
         public string DirNotStarted { get; set; } = "";
@@ -53,28 +49,11 @@ namespace GitBranchSwitcher
                 }
             } catch { }
 
-            // 补全默认路径
-            if (s.SubDirectoriesToScan == null) s.SubDirectoriesToScan = new List<string>();
-            var requiredPaths = new[] { "Assets/Script", "Assets/Script/Biubiubiu2" };
-            bool changed = false;
-            foreach (var req in requiredPaths) {
-                if (!s.SubDirectoriesToScan.Any(x => string.Equals(x, req, StringComparison.OrdinalIgnoreCase))) {
-                    s.SubDirectoriesToScan.Add(req);
-                    changed = true;
-                }
-            }
-            if (s.MaxParallel < 16) { s.MaxParallel = 16; changed = true; }
-
-            // [新增] 如果用户的配置文件里没有路径（或者是空的），强制设为你的默认路径
-            if (string.IsNullOrWhiteSpace(s.LeaderboardPath))
-            {
-                s.LeaderboardPath = @"\\SS-ZHOUSHUAI\GitRankData\rank.json";
-                changed = true;
-            }
+            if (s.MaxParallel < 16) s.MaxParallel = 16;
+            if (string.IsNullOrWhiteSpace(s.LeaderboardPath)) s.LeaderboardPath = @"\\SS-ZHOUSHUAI\GitRankData\rank.json";
+            if (s.CachedRepos == null) s.CachedRepos = new List<RepoCacheItem>();
 
             s.CheckDateReset();
-
-            if (changed) s.Save();
             return s;
         }
 

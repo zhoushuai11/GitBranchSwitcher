@@ -284,5 +284,50 @@ namespace GitBranchSwitcher
             }
             catch (Exception ex) { return (-3, "", ex.Message); }
         }
+        
+        public static List<string> ScanForGitRepositories(string rootPath)
+        {
+            var repos = new List<string>();
+            try
+            {
+                if (!Directory.Exists(rootPath)) return repos;
+
+                // 1. 检查当前目录
+                if (IsGitRoot(rootPath))
+                {
+                    repos.Add(rootPath);
+                    // 如果你的项目结构是嵌套的（仓库里套仓库），请注释掉下面这行
+                    // return repos; 
+                }
+
+                // 2. 递归子目录
+                var subDirs = Directory.GetDirectories(rootPath);
+                foreach (var dir in subDirs)
+                {
+                    var name = Path.GetFileName(dir);
+                    if (IsIgnoredFolder(name)) continue; // 仅跳过 .git 等系统目录
+                    repos.AddRange(ScanForGitRepositories(dir));
+                }
+            }
+            catch { }
+            return repos;
+        }
+
+        private static bool IsGitRoot(string path)
+        {
+            return Directory.Exists(Path.Combine(path, ".git"));
+        }
+
+        private static bool IsIgnoredFolder(string name)
+        {
+            // [修改] 仅跳过绝对不应该扫描的系统/元数据目录
+            // Library 和 Temp 现在会被扫描
+            return name.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals(".vs", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals(".idea", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("node_modules", StringComparison.OrdinalIgnoreCase) || // 前端库通常太深且无意义，建议保留
+                   name.Equals("$Recycle.Bin", StringComparison.OrdinalIgnoreCase) ||
+                   name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

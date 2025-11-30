@@ -11,14 +11,13 @@ namespace GitBranchSwitcher
     public class UserStat
     {
         public string Name { get; set; } = "";
-        public int TotalSwitches { get; set; } = 0;     // 次数
-        public double TotalDuration { get; set; } = 0;  // 总时长(秒)
+        public int TotalSwitches { get; set; } = 0;     // 累计次数
+        public double TotalDuration { get; set; } = 0;  // 累计时长(秒)
         public DateTime LastActive { get; set; }
     }
 
     public static class LeaderboardService
     {
-        // 共享文件路径
         private static string _sharedFilePath = ""; 
 
         public static void SetPath(string path)
@@ -26,16 +25,18 @@ namespace GitBranchSwitcher
             _sharedFilePath = path;
         }
 
-        // [修改] 上传数据时，传入本次耗时
-        public static async Task UploadMyScoreAsync(double durationSeconds)
+        // [关键修改] 返回值必须是 Task<(int, double)>，否则 MainForm 会报错
+        public static async Task<(int totalCount, double totalTime)> UploadMyScoreAsync(double durationSeconds)
         {
-            if (string.IsNullOrEmpty(_sharedFilePath)) return;
+            if (string.IsNullOrEmpty(_sharedFilePath)) return (0, 0);
 
-            await Task.Run(() =>
+            return await Task.Run(() =>
             {
                 string myName = Environment.UserName; 
+                int finalCount = 0;
+                double finalTime = 0;
 
-                // 重试机制，防止文件被锁
+                // 重试 5 次防止文件被别人锁住
                 for (int i = 0; i < 5; i++)
                 {
                     try
@@ -49,24 +50,42 @@ namespace GitBranchSwitcher
                                 me = new UserStat { Name = myName, TotalSwitches = 0, TotalDuration = 0 };
                                 data.Add(me);
                             }
+                            
                             // 累加数据
                             me.TotalSwitches++;
                             me.TotalDuration += durationSeconds;
                             me.LastActive = DateTime.Now;
 
+                            // [关键] 记录最新值用于返回给界面
+                            finalCount = me.TotalSwitches;
+                            finalTime = me.TotalDuration;
+
+                            // 写入文件
                             fileStream.SetLength(0);
                             using var writer = new StreamWriter(fileStream);
                             var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
                             writer.Write(json);
                         }
-                        return; 
+                        
+                        // 成功，返回最新数据
+                        return (finalCount, finalTime); 
                     }
-                    catch (IOException) { Thread.Sleep(200); }
-                    catch { return; }
+                    catch (IOException) 
+                    { 
+                        // 文件被锁，稍等重试
+                        Thread.Sleep(200); 
+                    }
+                    catch 
+                    { 
+                        // 其他错误直接退出
+                        return (0, 0); 
+                    }
                 }
+                return (0, 0);
             });
         }
 
+        // 获取排行榜列表
         public static async Task<List<UserStat>> GetLeaderboardAsync()
         {
             if (string.IsNullOrEmpty(_sharedFilePath) || !File.Exists(_sharedFilePath))
@@ -86,15 +105,30 @@ namespace GitBranchSwitcher
             });
         }
 
+        // 获取自己的数据（用于初始化）
+        public static async Task<(int, double)> GetMyStatsAsync()
+        {
+            var list = await GetLeaderboardAsync();
+            var me = list.FirstOrDefault(u => u.Name == Environment.UserName);
+            if (me != null) return (me.TotalSwitches, me.TotalDuration);
+            return (0, 0);
+        }
+
+        // 辅助：读取并加锁
         private static List<UserStat> ReadAndLock(out FileStream fs)
         {
             if (!File.Exists(_sharedFilePath))
             {
-                var dir = Path.GetDirectoryName(_sharedFilePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.WriteAllText(_sharedFilePath, "[]");
+                try {
+                    var dir = Path.GetDirectoryName(_sharedFilePath);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                    File.WriteAllText(_sharedFilePath, "[]");
+                } catch { }
             }
+            
+            // FileShare.None 表示独占访问
             fs = new FileStream(_sharedFilePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            
             using var reader = new StreamReader(fs, System.Text.Encoding.UTF8, true, 1024, leaveOpen: true);
             var text = reader.ReadToEnd();
             if (string.IsNullOrWhiteSpace(text)) return new List<UserStat>();
