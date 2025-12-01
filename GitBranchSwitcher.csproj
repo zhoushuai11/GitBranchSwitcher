@@ -9,19 +9,21 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.0.5.0</AssemblyVersion>
-        <FileVersion>1.0.5.0</FileVersion>
+        <AssemblyVersion>1.0.6.0</AssemblyVersion>
+        <FileVersion>1.0.6.0</FileVersion>
+
+        <IsBetaMode>true</IsBetaMode>
 
         <IsPureMode>false</IsPureMode>
-
         <IsBossMode>false</IsBossMode>
 
         <DefineConstants Condition="'$(IsPureMode)'=='true'">$(DefineConstants);PURE_MODE</DefineConstants>
         <DefineConstants Condition="'$(IsBossMode)'=='true'">$(DefineConstants);BOSS_MODE</DefineConstants>
+        <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 优化了多模式发布流程。
-            2. BOSS 模式现在也不会覆盖共享目录的通用版本了。
+            1. 修复了批量提交功能缺失的问题。
+            2. 增加了测试版发布模式。
         </ReleaseNote>
 
         <DeployRootPath>H:\GitFleetManagerProjectRoot\GitRankData</DeployRootPath>
@@ -31,7 +33,7 @@
         <EmbeddedResource Include="Assets\**\*" />
     </ItemGroup>
 
-    <Target Name="AutoDeployAfterPublish" AfterTargets="Publish" Condition="'$(IsPureMode)'!='true' And '$(IsBossMode)'!='true'">
+    <Target Name="AutoDeployAfterPublish" AfterTargets="Publish" Condition="'$(IsPureMode)'!='true' And '$(IsBossMode)'!='true' And '$(IsBetaMode)'!='true'">
         <Message Text=">>> 🚀 [内部通用版] 开始自动化部署到共享目录..." Importance="high" />
 
         <MakeDir Directories="$(DeployRootPath)\Version" />
@@ -59,9 +61,8 @@
         <Message Text=">>> ✅ 自动化部署完成！" Importance="high" />
     </Target>
 
-    <Target Name="SkippedDeployMessage" AfterTargets="Publish" Condition="'$(IsPureMode)'=='true' Or '$(IsBossMode)'=='true'">
-        <Message Text=">>> 🛑 [特殊模式发布] 已跳过自动化部署 (纯净模式 或 老板模式 已开启)。" Importance="high" />
-        <Message Text=">>> 文件位于: $(PublishDir)" Importance="high" />
+    <Target Name="BetaModeMessage" AfterTargets="Publish" Condition="'$(IsBetaMode)'=='true'">
+        <Message Text=">>> 🧪 [测试版] 发布完成！文件位于默认 Publish 目录，未执行远程部署。" Importance="high" />
     </Target>
 
 </Project>

@@ -7,7 +7,18 @@ namespace GitBranchSwitcher
         public string? CurrentBranch { get; set; }
         public bool SwitchOk { get; set; }
         public string? LastMessage { get; set; }
+        
+        // [新增] 同步状态缓存
+        public int Incoming { get; set; } = 0; // 需拉取
+        public int Outgoing { get; set; } = 0; // 需推送
 
         public GitRepo(string name, string path) { Name = name; Path = path; }
+    }
+    
+    // [新增] 文件变更结构
+    public class FileChangeItem
+    {
+        public string Status { get; set; } = ""; // "M", "A", "??"
+        public string FilePath { get; set; } = "";
     }
 }
