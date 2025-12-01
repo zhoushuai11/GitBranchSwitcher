@@ -11,13 +11,12 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.0.3.0</AssemblyVersion>
-        <FileVersion>1.0.3.0</FileVersion>
+        <AssemblyVersion>1.0.4.0</AssemblyVersion>
+        <FileVersion>1.0.4.0</FileVersion>
 
         <ReleaseNote>
-            1. 修复瘦身问题，单个仓库瘦身加入排行榜。
-            2. 优化了自动更新逻辑。
-            3. 回归手动版本管理模式，发布更可控。
+            1. 增加新仓库拉线功能。
+            2. 一键瘦身增加日志。
         </ReleaseNote>
 
         <DeployRootPath>H:\GitFleetManagerProjectRoot\GitRankData</DeployRootPath>

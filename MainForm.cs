@@ -362,6 +362,7 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnR2);
             repoToolbar.Controls.Add(btnR3);
             repoToolbar.Controls.Add(btnRescan);
+            
 #if !BOSS_MODE
             var btnRank = new Button {
                 Text = "🏆 排行榜", AutoSize = true, ForeColor = Color.DarkGoldenrod, Font = new Font(DefaultFont, FontStyle.Bold)
@@ -374,6 +375,47 @@ namespace GitBranchSwitcher {
             btnSuperSlim.Click += (_, __) => StartSuperSlimProcess();
             repoToolbar.Controls.Add(btnSuperSlim);
 #endif
+            var btnNewClone = new Button { Text = "➕ 新建拉线", AutoSize = true, BackColor = Color.Honeydew };
+            btnNewClone.Click += (_, __) => 
+            {
+                // 1. 创建窗口 (不传参数了)
+                var form = new CloneForm();
+    
+                // 2. 如果用户点击了“完成”并自动关闭了窗口 (DialogResult.OK)
+                if (form.ShowDialog(this) == DialogResult.OK)
+                {
+                    var newPaths = form.CreatedWorkspaces;
+                    if (newPaths != null && newPaths.Count > 0)
+                    {
+                        bool changed = false;
+                        foreach (var path in newPaths)
+                        {
+                            // 如果设置里没有，就加进去
+                            if (!_settings.ParentPaths.Contains(path))
+                            {
+                                _settings.ParentPaths.Add(path);
+                                // 顺便把这个新加的设为“已勾选”
+                                _checkedParents.Add(path);
+                                changed = true;
+                            }
+                        }
+
+                        if (changed)
+                        {
+                            _settings.Save();
+                
+                            // 刷新界面列表 (CheckboxList)
+                            SeedParentsToUi(); // 重新加载 UI 列表
+                            RefilterParentsList(); // 应用过滤
+
+                            // 立即触发扫描，加载新项目
+                            MessageBox.Show($"已自动添加 {newPaths.Count} 个新项目到列表！\n正在扫描...", "完成");
+                            _ = LoadReposForCheckedParentsAsync(true); // true = 强制扫描硬盘
+                        }
+                    }
+                }
+            };
+            repoToolbar.Controls.Add(btnNewClone); // 加入到工具栏
             btnR1.Click += (_, __) => {
                 foreach (ListViewItem i in lvRepos.Items)
                     i.Checked = false;
@@ -1112,33 +1154,55 @@ namespace GitBranchSwitcher {
                 return;
             if (MessageBox.Show("CPU 将会满载。\n真的要继续吗？", "确认 (2/2)", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 return;
+
             var selectedParents = ShowParentSelectionDialog();
             if (selectedParents.Count == 0)
                 return;
+
             this.Enabled = false;
             long totalSavedBytes = 0;
             int totalRepos = 0;
+
             foreach (var parent in selectedParents) {
                 var cache = _settings.RepositoryCache.FirstOrDefault(x => string.Equals(x.ParentPath, parent, StringComparison.OrdinalIgnoreCase));
                 if (cache == null || cache.Children.Count == 0)
                     continue;
+
                 Log($"=== 清理父节点: {Path.GetFileName(parent)} ===");
+
                 foreach (var repoInfo in cache.Children) {
                     totalRepos++;
                     Log($" >>> [清理中] {repoInfo.Name} ...");
                     statusLabel.Text = $"正在瘦身: {repoInfo.Name}";
+
                     var (ok, log, sizeStr, saved) = await Task.Run(() => GitHelper.GarbageCollect(repoInfo.FullPath, true));
+
                     if (ok) {
                         totalSavedBytes += saved;
                         Log($"[成功] {repoInfo.Name}: 减小 {sizeStr}");
                     } else {
-                        Log($"[失败] {repoInfo.Name}");
+                        // [改进点] 智能提取错误原因
+                        string errorSummary = "未知错误";
+                        if (!string.IsNullOrWhiteSpace(log)) {
+                            // 尝试优先提取包含 "❌" 或 "fatal" 或 "error" 的行
+                            var lines = log.Split(new[] {
+                                '\r', '\n'
+                            }, StringSplitOptions.RemoveEmptyEntries);
+                            // 找最后出现的错误提示，通常是最根本的原因
+                            var errorLine = lines.LastOrDefault(l => l.Contains("❌") || l.Contains("error", StringComparison.OrdinalIgnoreCase) || l.Contains("fatal", StringComparison.OrdinalIgnoreCase));
+                            // 如果没找到特定关键词，就取最后一行日志
+                            errorSummary = errorLine ?? lines.LastOrDefault() ?? "无日志返回";
+                        }
+
+                        // 将错误原因显示在日志面板中
+                        Log($"[失败] {repoInfo.Name}: {errorSummary}");
                     }
                 }
             }
 
             this.Enabled = true;
             statusLabel.Text = "清理完成";
+
 #if !BOSS_MODE
             if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
                 var stats = await LeaderboardService.UploadMyScoreAsync(0, totalSavedBytes);

@@ -356,5 +356,63 @@ public static (bool ok, string log, string sizeInfo, long bytesSaved) GarbageCol
                    name.Equals("$Recycle.Bin", StringComparison.OrdinalIgnoreCase) ||
                    name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase);
         }
+        
+        public static (bool ok, string message) Clone(string repoUrl, string localPath, string branch, Action<string>? onProgress = null)
+        {
+            // 1. 检查目录
+            if (Directory.Exists(localPath) && Directory.GetFileSystemEntries(localPath).Length > 0)
+            {
+                // 如果目录非空且有 .git，可能是已存在的仓
+                if (IsGitRoot(localPath)) return (false, "目录已存在 Git 仓库，跳过克隆");
+                // 否则可能是普通非空目录，提示风险
+                return (false, "目标目录非空且不是 Git 仓，跳过");
+            }
+
+            // 2. 构造命令
+            // --recursive 用于处理子模块
+            // --progress 让 git 输出进度
+            string args = $"clone --branch \"{branch}\" \"{repoUrl}\" \"{localPath}\" --recursive --progress";
+
+            var stdoutSb = new StringBuilder();
+            var stderrSb = new StringBuilder();
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = args,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            
+            // 环境变量优化
+            psi.Environment["GIT_TERMINAL_PROMPT"] = "0"; 
+
+            try
+            {
+                using var p = new Process();
+                p.StartInfo = psi;
+
+                p.OutputDataReceived += (_, e) => { if (e.Data != null) { stdoutSb.AppendLine(e.Data); onProgress?.Invoke(e.Data); } };
+                // Git clone 的进度信息通常输出在 Stderr
+                p.ErrorDataReceived += (_, e) => { if (e.Data != null) { stderrSb.AppendLine(e.Data); onProgress?.Invoke(e.Data); } };
+
+                p.Start();
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+                p.WaitForExit();
+
+                if (p.ExitCode == 0) return (true, "克隆成功");
+                
+                return (false, $"失败 (Code {p.ExitCode}): {stderrSb}");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"异常: {ex.Message}");
+            }
+        }
     }
 }
