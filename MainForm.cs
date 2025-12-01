@@ -89,9 +89,10 @@ namespace GitBranchSwitcher {
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-
+#if !PURE_MODE
             // 窗口显示后再检查更新，传入 'this'
             _ = UpdateService.CheckAndUpdateAsync(_settings.UpdateSourcePath, this);
+#endif
         }
 
         private async Task InitMyStatsAsync() {
@@ -106,11 +107,12 @@ namespace GitBranchSwitcher {
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             string vStr = $"{version.Major}.{version.Minor}.{version.Build}"; // 例如 1.0.2
 
-#if BOSS_MODE
-    Text = $"Git 分支管理工具 (Enterprise) - v{vStr}";
+#if PURE_MODE
+            Text = $"Git 分支管理工具 (Pure) - v{vStr}";
+#elif BOSS_MODE
+            Text = $"Git 分支管理工具 (Enterprise) - v{vStr}";
 #else
-            // [修改点] 标题增加版本号
-            Text = $"Unity 项目切线工具 (Slim King) - v{vStr}";
+             Text = $"Unity 项目切线工具 (Slim King) - v{vStr}";
 #endif
     
             Width = 1400; Height = 900; StartPosition = FormStartPosition.CenterScreen;
@@ -317,7 +319,7 @@ namespace GitBranchSwitcher {
                     // 2. [新增] 上报战绩到排行榜
                     // 只有成功且清理出空间 (res.bytesSaved > 0) 才上报
                     if (res.ok && res.bytesSaved > 0) {
-#if !BOSS_MODE
+#if !BOSS_MODE && !PURE_MODE
                         if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
                             // 只上报空间，次数和时长填 0
                             var stats = await LeaderboardService.UploadMyScoreAsync(0, res.bytesSaved);
@@ -363,7 +365,7 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnR3);
             repoToolbar.Controls.Add(btnRescan);
             
-#if !BOSS_MODE
+#if !BOSS_MODE && !PURE_MODE
             var btnRank = new Button {
                 Text = "🏆 排行榜", AutoSize = true, ForeColor = Color.DarkGoldenrod, Font = new Font(DefaultFont, FontStyle.Bold)
             };
@@ -562,7 +564,7 @@ namespace GitBranchSwitcher {
             statusStrip.Items.Add(new ToolStripStatusLabel {
                 Spring = true
             });
-#if !BOSS_MODE
+#if !BOSS_MODE && !PURE_MODE
             statusStats = new ToolStripStatusLabel {
                 Alignment = ToolStripItemAlignment.Right, ForeColor = Color.Blue
             };
@@ -1136,7 +1138,7 @@ namespace GitBranchSwitcher {
 
             await Task.WhenAll(tasks);
             batchSw.Stop();
-#if !BOSS_MODE
+#if !BOSS_MODE && !PURE_MODE
             if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
                 var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(batchSw.Elapsed.TotalSeconds, 0);
                 UpdateStatsUi(nc, nt, ns);

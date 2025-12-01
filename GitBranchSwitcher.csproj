@@ -5,18 +5,23 @@
         <UseWindowsForms>true</UseWindowsForms>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
-
         <ApplicationIcon>AppIcon.ico</ApplicationIcon>
-
     </PropertyGroup>
 
     <PropertyGroup>
         <AssemblyVersion>1.0.4.0</AssemblyVersion>
         <FileVersion>1.0.4.0</FileVersion>
 
+        <IsPureMode>false</IsPureMode>
+
+        <IsBossMode>false</IsBossMode>
+
+        <DefineConstants Condition="'$(IsPureMode)'=='true'">$(DefineConstants);PURE_MODE</DefineConstants>
+        <DefineConstants Condition="'$(IsBossMode)'=='true'">$(DefineConstants);BOSS_MODE</DefineConstants>
+
         <ReleaseNote>
-            1. 增加新仓库拉线功能。
-            2. 一键瘦身增加日志。
+            1. 优化了多模式发布流程。
+            2. BOSS 模式现在也不会覆盖共享目录的通用版本了。
         </ReleaseNote>
 
         <DeployRootPath>H:\GitFleetManagerProjectRoot\GitRankData</DeployRootPath>
@@ -26,8 +31,8 @@
         <EmbeddedResource Include="Assets\**\*" />
     </ItemGroup>
 
-    <Target Name="AutoDeployAfterPublish" AfterTargets="Publish">
-        <Message Text=">>> 🚀 开始自动化部署到共享目录..." Importance="high" />
+    <Target Name="AutoDeployAfterPublish" AfterTargets="Publish" Condition="'$(IsPureMode)'!='true' And '$(IsBossMode)'!='true'">
+        <Message Text=">>> 🚀 [内部通用版] 开始自动化部署到共享目录..." Importance="high" />
 
         <MakeDir Directories="$(DeployRootPath)\Version" />
         <MakeDir Directories="$(DeployRootPath)\Exe" />
@@ -51,7 +56,12 @@
               OverwriteReadOnlyFiles="true" />
         <Message Text=">>> [Exe] 已复制到: $(DeployRootPath)\Exe" Importance="high" />
 
-        <Message Text=">>> ✅ 自动化部署完成！版本: $(AssemblyVersion)" Importance="high" />
+        <Message Text=">>> ✅ 自动化部署完成！" Importance="high" />
+    </Target>
+
+    <Target Name="SkippedDeployMessage" AfterTargets="Publish" Condition="'$(IsPureMode)'=='true' Or '$(IsBossMode)'=='true'">
+        <Message Text=">>> 🛑 [特殊模式发布] 已跳过自动化部署 (纯净模式 或 老板模式 已开启)。" Importance="high" />
+        <Message Text=">>> 文件位于: $(PublishDir)" Importance="high" />
     </Target>
 
 </Project>
