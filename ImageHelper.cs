@@ -62,35 +62,32 @@ namespace GitBranchSwitcher
                 stream.CopyTo(ms);
                 ms.Position = 0;
                 return Image.FromStream(ms, true, true);
+            } catch {
+                return null;
             }
-            catch { return null; }
         }
 
-        // [修复] 专门加载 Icon，支持 .png/.jpg 自动转 .ico
-        public static Icon? LoadIconFromResource(string key)
-        {
-            if (!_resourceMap.ContainsKey(key) || _resourceMap[key].Count == 0) return null;
+        // [重构] 精准加载嵌入的 .ico 资源
+        public static Icon? LoadIconFromResource(string key) {
             try {
-                var list = _resourceMap[key];
-                // 优先找真正的 .ico
-                var bestMatch = list.FirstOrDefault(x => x.EndsWith(".ico", StringComparison.OrdinalIgnoreCase)) ?? list[0];
-                
                 var asm = Assembly.GetExecutingAssembly();
-                using var stream = asm.GetManifestResourceStream(bestMatch);
-                if (stream == null) return null;
 
-                if (bestMatch.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
-                {
-                    return new Icon(stream);
+                // 因为我们在 csproj 里指定了 <LogicalName>，所以名字是固定的
+                // 这里的 key 参数其实可以忽略了，或者保留作为扩展
+                string resourceName = "GitBranchSwitcher.AppIcon.ico";
+
+                using var stream = asm.GetManifestResourceStream(resourceName);
+                if (stream == null) {
+                    // 如果找不到，打印一下所有资源名，方便调试 (调试时用)
+                    // var allNames = asm.GetManifestResourceNames();
+                    return null;
                 }
-                else
-                {
-                    // 如果是 png/jpg，转换成 Icon
-                    using var bmp = new Bitmap(stream);
-                    // GetHicon 创建的句柄需要管理，但在此简单场景下依赖系统回收或 Form 生命周期即可
-                    return Icon.FromHandle(bmp.GetHicon());
-                }
-            } catch { return null; }
+
+                // 直接从流创建 Icon，效果最好，支持多尺寸自动切换
+                return new Icon(stream);
+            } catch {
+                return null;
+            }
         }
     }
 }

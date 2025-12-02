@@ -83,9 +83,7 @@ namespace GitBranchSwitcher {
         public MainForm() {
             _settings = AppSettings.Load();
             InitializeComponent();
-#if !BOSS_MODE
             TrySetRuntimeIcon();
-#endif
             InitUi();
 #if !BOSS_MODE
             LoadStateImagesRandom();
@@ -206,15 +204,13 @@ namespace GitBranchSwitcher {
             btnRemoveParent = MakeBtn("🗑️ 移除选中");
             btnRemoveParent.Width = 140;
 
-            var btnSelectAll = MakeBtn("全选");
-            btnSelectAll.Width = 68;
-            var btnSelectNone = MakeBtn("全不选");
-            btnSelectNone.Width = 68;
+            // [修改开始] 合并全选/反选按钮
+            var btnToggleParents = MakeBtn("✅ 全选/反选"); // 替换原来的两个按钮
+            btnToggleParents.Width = 140; // 稍微宽一点
             var pnlSelectBtns = new FlowLayoutPanel {
                 AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0)
             };
-            pnlSelectBtns.Controls.Add(btnSelectAll);
-            pnlSelectBtns.Controls.Add(btnSelectNone);
+            pnlSelectBtns.Controls.Add(btnToggleParents);
 
             pnlTopBtns.Controls.Add(btnAddParent);
             pnlTopBtns.Controls.Add(btnRemoveParent);
@@ -259,17 +255,24 @@ namespace GitBranchSwitcher {
                 SeedParentsToUi();
                 await LoadReposForCheckedParentsAsync(true);
             };
-            btnSelectAll.Click += async (_, __) => {
-                _checkedParents = new HashSet<string>(_settings.ParentPaths);
-                for (int i = 0; i < lbParents.Items.Count; i++)
-                    lbParents.SetItemChecked(i, true);
-                await LoadReposForCheckedParentsAsync(false);
-            };
-            btnSelectNone.Click += async (_, __) => {
+            btnToggleParents.Click += async (_, __) => {
+                // 逻辑：如果当前已经是“全部选中”状态，则执行“全不选”；否则执行“全选”
+                bool isAllChecked = lbParents.CheckedItems.Count == lbParents.Items.Count;
+                bool targetState = !isAllChecked;
+
                 _checkedParents.Clear();
+                if (targetState) {
+                    // 如果目标是全选，把所有项加入 _checkedParents
+                    foreach (var item in lbParents.Items)
+                        _checkedParents.Add(item.ToString());
+                }
+
+                // 更新 UI 勾选状态
                 for (int i = 0; i < lbParents.Items.Count; i++)
-                    lbParents.SetItemChecked(i, false);
-                await LoadReposForCheckedParentsAsync(true);
+                    lbParents.SetItemChecked(i, targetState);
+
+                // 触发刷新
+                await LoadReposForCheckedParentsAsync(targetState ? false : true);
             };
             lbParents.ItemCheck += async (_, e) => {
                 var p = lbParents.Items[e.Index].ToString();
@@ -681,8 +684,12 @@ namespace GitBranchSwitcher {
                 Width = 1000,
                 Height = 700,
                 StartPosition = FormStartPosition.CenterScreen,
-                Icon = this.Icon, // 保持图标一致
-                ShowInTaskbar = false // 可选：设为 false 让它像工具窗口；设为 true 则在任务栏有独立图标
+                
+                // [重点] 显式继承主窗口的 Icon
+                // 因为 TrySetRuntimeIcon() 在 InitUi() 之前执行，所以 this.Icon 此时已经是加载好的图标了
+                Icon = this.Icon, 
+                
+                ShowInTaskbar = false 
             };
             // 将控制台面板放入窗口
             consoleWindow.Controls.Add(grpDetails);
@@ -762,36 +769,63 @@ namespace GitBranchSwitcher {
 
             lbParents.EndUpdate();
         }
-
         private void RenderRepoItem(ListViewItem item) {
             if (item == null || item.Tag == null)
                 return;
             var repo = (GitRepo)item.Tag;
-            string display = repo.CurrentBranch;
+    
+            // 1. 准备显示文本和颜色
+            string displayBranch = repo.CurrentBranch;
+            string statusPrefix = ""; 
+            Color textColor = Color.Black;
+
+            // 默认字体（保持和其他列一致）
+            Font currentFont = item.Font; 
+            // 如果想要加粗高亮，可以使用: new Font(item.Font, FontStyle.Bold);
+
             if (repo.IsSyncChecked) {
                 if (!repo.HasUpstream) {
-                    display += "  ⚠️ 无远程";
-                    item.SubItems[1].ForeColor = Color.Gray;
+                    displayBranch += " (⚠️无远程)";
+                    textColor = Color.Gray;
                 } else if (repo.Incoming == 0 && repo.Outgoing == 0) {
-                    display += "  ✔ 最新";
-                    item.SubItems[1].ForeColor = Color.Green;
+                    // 最新：使用一种偏深的绿色，比纯亮绿更易读
+                    textColor = Color.SeaGreen; 
                 } else {
-                    string arrows = "";
-                    if (repo.Outgoing > 0)
-                        arrows += $" {repo.Outgoing}↑";
+                    var sb = new StringBuilder();
+            
+                    // [拉取] 红色警示
+                    if (repo.Incoming > 0) {
+                        sb.Append($"[⬇ {repo.Incoming}] ");
+                    }
+            
+                    // [推送] 蓝色提示
+                    if (repo.Outgoing > 0) {
+                        sb.Append($"[⬆ {repo.Outgoing}] ");
+                    }
+
+                    statusPrefix = sb.ToString();
+
+                    // 变色逻辑：只要有东西要拉，就变红（优先级高）；否则如果只有推，就变蓝
                     if (repo.Incoming > 0)
-                        arrows += $" {repo.Incoming}↓";
-                    display += $"  {arrows}";
-                    if (repo.Incoming > 0)
-                        item.SubItems[1].ForeColor = Color.Red;
+                        textColor = Color.Red; 
                     else
-                        item.SubItems[1].ForeColor = Color.Blue;
+                        textColor = Color.Blue;
                 }
-            } else {
-                item.SubItems[1].ForeColor = Color.Black;
             }
 
-            item.SubItems[1].Text = display;
+            // ==============================================================================
+            // [关键修复] 必须设置为 false，否则 SubItems[1].ForeColor 会被忽略，强制跟随第一列颜色
+            // ==============================================================================
+            item.UseItemStyleForSubItems = false;
+
+            // 设置第二列（当前分支）的文本
+            item.SubItems[1].Text = statusPrefix + displayBranch;
+    
+            // 设置第二列的颜色
+            item.SubItems[1].ForeColor = textColor;
+
+            // (可选) 如果你希望“状态”列（第一列）保持黑色，可以显式重置一下，防止它被意外影响
+            // item.SubItems[0].ForeColor = Color.Black; 
         }
 
         private async Task BatchSyncStatusUpdate() {
@@ -1287,9 +1321,11 @@ namespace GitBranchSwitcher {
 
         private void TrySetRuntimeIcon() {
             try {
+                // key 参数传什么都不重要了，因为 ImageHelper 里写死了读取 AppIcon.ico
                 var icon = ImageHelper.LoadIconFromResource("appicon");
-                if (icon != null)
+                if (icon != null) {
                     this.Icon = icon;
+                }
             } catch {
             }
         }

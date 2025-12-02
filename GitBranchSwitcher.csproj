@@ -9,10 +9,10 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.0.6.0</AssemblyVersion>
-        <FileVersion>1.0.6.0</FileVersion>
+        <AssemblyVersion>1.0.9.0</AssemblyVersion>
+        <FileVersion>1.0.9.0</FileVersion>
 
-        <IsBetaMode>true</IsBetaMode>
+        <IsBetaMode>false</IsBetaMode>
 
         <IsPureMode>false</IsPureMode>
         <IsBossMode>false</IsBossMode>
@@ -22,9 +22,7 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 优化了皮呀满意的 UI
-            2. 修复了若干已知问题
-            3. 控制台功能优化
+            1. 感谢威威哥提供的 icon，我有头了
         </ReleaseNote>
 
         <DeployRootPath>H:\GitFleetManagerProjectRoot\GitRankData</DeployRootPath>
@@ -32,6 +30,9 @@
 
     <ItemGroup>
         <EmbeddedResource Include="Assets\**\*" />
+        <EmbeddedResource Include="AppIcon.ico">
+            <LogicalName>GitBranchSwitcher.AppIcon.ico</LogicalName>
+        </EmbeddedResource>
     </ItemGroup>
 
     <Target Name="AutoDeployAfterPublish" AfterTargets="Publish" Condition="'$(IsPureMode)'!='true' And '$(IsBossMode)'!='true' And '$(IsBetaMode)'!='true'">
