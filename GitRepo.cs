@@ -1,23 +1,26 @@
-namespace GitBranchSwitcher
-{
-    public class GitRepo
-    {
+namespace GitBranchSwitcher {
+    // GitRepo 类定义 (确保字段完整)
+    public class GitRepo {
         public string Name { get; set; }
         public string Path { get; set; }
-        public string? CurrentBranch { get; set; }
+        public string CurrentBranch { get; set; } = "—";
         public bool SwitchOk { get; set; }
-        public string? LastMessage { get; set; }
-        
-        // [新增] 同步状态缓存
-        public int Incoming { get; set; } = 0; // 需拉取
-        public int Outgoing { get; set; } = 0; // 需推送
+        public string LastMessage { get; set; }
 
-        public GitRepo(string name, string path) { Name = name; Path = path; }
+        // 同步状态缓存
+        public int Incoming { get; set; } = 0;
+        public int Outgoing { get; set; } = 0;
+        public bool HasUpstream { get; set; } = true;
+        public bool IsSyncChecked { get; set; } = false;
+
+        public GitRepo(string name, string path) {
+            Name = name;
+            Path = path;
+        }
     }
-    
+
     // [新增] 文件变更结构
-    public class FileChangeItem
-    {
+    public class FileChangeItem {
         public string Status { get; set; } = ""; // "M", "A", "??"
         public string FilePath { get; set; } = "";
     }

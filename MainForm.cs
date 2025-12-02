@@ -11,20 +11,29 @@ using System.Text;
 
 namespace GitBranchSwitcher {
     public partial class MainForm : Form {
-        // === UI 控件 ===
-        private TableLayoutPanel tlTop;
-        private CheckedListBox lbParents;
-        private TextBox txtSearch;
-        private Button btnAddParent, btnRemoveParent, btnSelectAllParents, btnClearParents;
-        private Label lblHintParents;
+        // ==========================================
+        // [关键修复] 必须在这里定义这三个 GroupBox
+        // ==========================================
+        private GroupBox grpTop; // 顶部工程区
+        private GroupBox grpList; // 左侧列表区
+        private GroupBox grpActions; // 右侧操作区
 
-        private SplitContainer splitMain;
-        private SplitContainer splitConsole;
+        // === 布局容器 ===
+        private SplitContainer splitGlobal;
+        private SplitContainer splitUpper;
+        private SplitContainer splitMiddle;
+        private SplitContainer splitBottom;
+        private TableLayoutPanel layoutMain; // 如果不用 SplitContainer 全局布局，备用
+
+        // === 控件定义 ===
+        private CheckedListBox lbParents;
+        private Button btnAddParent, btnRemoveParent, btnSelectAllParents, btnClearParents;
 
         private ListView lvRepos;
         private FlowLayoutPanel repoToolbar;
 
         private GroupBox grpDetails;
+        private SplitContainer splitConsole;
         private ListView lvFileChanges;
         private RichTextBox rtbDiff;
         private Panel pnlDetailRight, pnlActions;
@@ -32,20 +41,21 @@ namespace GitBranchSwitcher {
         private TextBox txtCommitMsg;
         private Button btnCommit, btnPull, btnPush, btnStash;
 
-        private Panel pnlRight;
-        private SplitContainer splitUpper;
+        private GroupBox grpLog;
+        private TextBox txtLog;
+
+        // 右侧操作区控件
         private Label lblTargetBranch, lblFetchStatus;
         private ComboBox cmbTargetBranch;
-        private Button btnSwitchAll, btnUseCurrentBranch;
+        private Button btnSwitchAll, btnUseCurrentBranch, btnToggleConsole;
         private CheckBox chkStashOnSwitch, chkFastMode;
         private FlowLayoutPanel statePanel;
         private PictureBox pbState, pbFlash;
         private Label lblStateText;
-        private System.Windows.Forms.Timer flashTimer;
-        private TextBox txtLog;
         private StatusStrip statusStrip;
         private ToolStripStatusLabel statusLabel, statusStats;
         private ToolStripProgressBar statusProgress;
+        private System.Windows.Forms.Timer flashTimer;
 
         // === 数据 ===
         private readonly BindingList<GitRepo> _repos = new BindingList<GitRepo>();
@@ -93,9 +103,20 @@ namespace GitBranchSwitcher {
 
         protected override void OnShown(EventArgs e) {
             base.OnShown(e);
+            ConfigureInitialLayout();
 #if !PURE_MODE
             _ = UpdateService.CheckAndUpdateAsync(_settings.UpdateSourcePath, this);
 #endif
+        }
+
+        private void ConfigureInitialLayout() {
+            try {
+                splitGlobal.SplitterDistance = (int)(this.Height * 0.65);
+                splitUpper.SplitterDistance = 140;
+                splitMiddle.SplitterDistance = (int)(this.Width * 0.7);
+                splitBottom.SplitterDistance = (int)(splitBottom.Height * 0.7);
+            } catch {
+            }
         }
 
         private async Task InitMyStatsAsync() {
@@ -115,15 +136,20 @@ namespace GitBranchSwitcher {
 #else
             Text = $"Unity 项目切线工具 (Slim King) - v{vStr}";
 #endif
-            Width = 1400;
+            Width = 1450;
             Height = 950;
             StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+            this.BackColor = Color.WhiteSmoke;
         }
 
         private Button MakeBtn(string text, Color? backColor = null) {
             var b = new Button {
-                Text = text, AutoSize = true, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand
+                Text = text,
+                AutoSize = true,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                Height = 28
             };
             b.FlatAppearance.BorderSize = 1;
             b.FlatAppearance.BorderColor = Color.LightGray;
@@ -135,20 +161,32 @@ namespace GitBranchSwitcher {
         }
 
         private void InitUi() {
-            // === 1. 顶部父目录区 ===
-            tlTop = new TableLayoutPanel {
-                Dock = DockStyle.Top,
-                Height = 130,
-                ColumnCount = 6,
-                Padding = new Padding(10),
-                BackColor = Color.WhiteSmoke
+            // === 全局布局容器 ===
+            splitGlobal = new SplitContainer {
+                Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterWidth = 6
             };
-            tlTop.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (int i = 0; i < 5; i++)
-                tlTop.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            tlTop.RowCount = 2;
-            tlTop.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            tlTop.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            splitUpper = new SplitContainer {
+                Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterWidth = 6
+            };
+            splitMiddle = new SplitContainer {
+                Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 6
+            };
+            splitBottom = new SplitContainer {
+                Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterWidth = 6
+            };
+
+            // ==========================================
+            // 1. 工程区 (grpTop)
+            // ==========================================
+            grpTop = new GroupBox {
+                Text = "① 工程区 (Project Workspace)", Dock = DockStyle.Fill, Padding = new Padding(10)
+            };
+
+            var pnlTopContent = new TableLayoutPanel {
+                Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1
+            };
+            pnlTopContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            pnlTopContent.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
             lbParents = new CheckedListBox {
                 Dock = DockStyle.Fill,
@@ -157,41 +195,39 @@ namespace GitBranchSwitcher {
                 BorderStyle = BorderStyle.None,
                 BackColor = Color.WhiteSmoke
             };
-            btnAddParent = MakeBtn("📂 添加父目录…", Color.AliceBlue);
+
+            var pnlTopBtns = new FlowLayoutPanel {
+                AutoSize = true, FlowDirection = FlowDirection.TopDown, Dock = DockStyle.Right, Margin = new Padding(0)
+            };
+
+            btnAddParent = MakeBtn("📂 添加父目录...", Color.AliceBlue);
+            btnAddParent.Width = 140;
             btnRemoveParent = MakeBtn("🗑️ 移除选中");
-            txtSearch = new TextBox {
-                Width = 200, Anchor = AnchorStyles.Left, BorderStyle = BorderStyle.FixedSingle
-            };
-            var lblSearch = new Label {
-                Text = "🔍 过滤：", AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = Color.Gray
-            };
-            var parentOps = new FlowLayoutPanel {
-                FlowDirection = FlowDirection.TopDown, AutoSize = true
-            };
-            btnSelectAllParents = MakeBtn("全选父目录");
-            btnClearParents = MakeBtn("全不选");
-            btnSelectAllParents.Font = new Font(DefaultFont.FontFamily, 8f);
-            btnClearParents.Font = new Font(DefaultFont.FontFamily, 8f);
-            parentOps.Controls.Add(btnSelectAllParents);
-            parentOps.Controls.Add(btnClearParents);
-            lblHintParents = new Label {
-                Text = "提示：勾选要使用的父目录；右键可操作。", AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(0, 5, 0, 0)
-            };
+            btnRemoveParent.Width = 140;
 
-            tlTop.Controls.Add(lbParents, 0, 0);
-            tlTop.Controls.Add(btnAddParent, 1, 0);
-            tlTop.Controls.Add(btnRemoveParent, 2, 0);
-            tlTop.Controls.Add(lblSearch, 3, 0);
-            tlTop.Controls.Add(txtSearch, 4, 0);
-            tlTop.Controls.Add(parentOps, 5, 0);
-            tlTop.Controls.Add(lblHintParents, 0, 1);
-            tlTop.SetColumnSpan(lblHintParents, 6);
+            var btnSelectAll = MakeBtn("全选");
+            btnSelectAll.Width = 68;
+            var btnSelectNone = MakeBtn("全不选");
+            btnSelectNone.Width = 68;
+            var pnlSelectBtns = new FlowLayoutPanel {
+                AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0)
+            };
+            pnlSelectBtns.Controls.Add(btnSelectAll);
+            pnlSelectBtns.Controls.Add(btnSelectNone);
 
+            pnlTopBtns.Controls.Add(btnAddParent);
+            pnlTopBtns.Controls.Add(btnRemoveParent);
+            pnlTopBtns.Controls.Add(pnlSelectBtns);
+
+            pnlTopContent.Controls.Add(lbParents, 0, 0);
+            pnlTopContent.Controls.Add(pnlTopBtns, 1, 0);
+            grpTop.Controls.Add(pnlTopContent);
+
+            // 绑定 Top 事件
             var cm = new ContextMenuStrip();
             cm.Items.Add("添加父目录…", null, (_, __) => btnAddParent.PerformClick());
             cm.Items.Add("移除选中", null, (_, __) => btnRemoveParent.PerformClick());
             lbParents.ContextMenuStrip = cm;
-
             btnAddParent.Click += (_, __) => {
                 using var fbd = new FolderBrowserDialog();
                 if (fbd.ShowDialog(this) == DialogResult.OK) {
@@ -203,7 +239,7 @@ namespace GitBranchSwitcher {
                         _settings.Save();
                     }
 
-                    RefilterParentsList();
+                    SeedParentsToUi();
                     _ = LoadReposForCheckedParentsAsync(true);
                 }
             };
@@ -219,10 +255,21 @@ namespace GitBranchSwitcher {
                 }
 
                 _settings.Save();
-                RefilterParentsList();
+                SeedParentsToUi();
                 await LoadReposForCheckedParentsAsync(true);
             };
-            txtSearch.TextChanged += (_, __) => RefilterParentsList();
+            btnSelectAll.Click += async (_, __) => {
+                _checkedParents = new HashSet<string>(_settings.ParentPaths);
+                for (int i = 0; i < lbParents.Items.Count; i++)
+                    lbParents.SetItemChecked(i, true);
+                await LoadReposForCheckedParentsAsync(false);
+            };
+            btnSelectNone.Click += async (_, __) => {
+                _checkedParents.Clear();
+                for (int i = 0; i < lbParents.Items.Count; i++)
+                    lbParents.SetItemChecked(i, false);
+                await LoadReposForCheckedParentsAsync(true);
+            };
             lbParents.ItemCheck += async (_, e) => {
                 var p = lbParents.Items[e.Index].ToString();
                 BeginInvoke(new Action(async () => {
@@ -233,51 +280,56 @@ namespace GitBranchSwitcher {
                     await LoadReposForCheckedParentsAsync(false);
                 }));
             };
-            btnSelectAllParents.Click += async (_, __) => {
-                _checkedParents = new HashSet<string>(_settings.ParentPaths);
-                for (int i = 0; i < lbParents.Items.Count; i++)
-                    lbParents.SetItemChecked(i, true);
-                await LoadReposForCheckedParentsAsync(false);
+
+            // 放入 SplitUpper 上部
+            splitUpper.Panel1.Controls.Add(grpTop);
+
+            // ==========================================
+            // 2. 仓库列表 (grpList)
+            // ==========================================
+            grpList = new GroupBox {
+                Text = "② 仓库列表 (Repositories)", Dock = DockStyle.Fill, Padding = new Padding(5)
             };
-            btnClearParents.Click += async (_, __) => {
-                _checkedParents.Clear();
-                for (int i = 0; i < lbParents.Items.Count; i++)
-                    lbParents.SetItemChecked(i, false);
-                await LoadReposForCheckedParentsAsync(true);
-            };
-            lbParents.KeyDown += async (_, e) => {
-                if (e.KeyCode == Keys.Delete)
-                    btnRemoveParent.PerformClick();
+            repoToolbar = new FlowLayoutPanel {
+                Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 0, 0, 5)
             };
 
-            // === 2. 主分割区域 ===
-            splitMain = new SplitContainer {
-                Dock = DockStyle.Fill, Orientation = Orientation.Horizontal
-            };
-            splitUpper = new SplitContainer {
-                Dock = DockStyle.Fill, Orientation = Orientation.Vertical, FixedPanel = FixedPanel.Panel2
-            };
+            var btnToggleSelect = MakeBtn("✅ 全选/反选");
+            var btnRescan = MakeBtn("🔄 刷新");
+            var btnNewClone = MakeBtn("➕ 新建拉线", Color.Azure);
+            btnNewClone.ForeColor = Color.DarkBlue;
+#if !BOSS_MODE && !PURE_MODE
+            var btnRank = MakeBtn("🏆 排行榜", Color.Ivory);
+            btnRank.ForeColor = Color.DarkGoldenrod;
+#endif
+            var btnSuperSlim = MakeBtn("🔥 一键瘦身", Color.MistyRose);
+            btnSuperSlim.ForeColor = Color.DarkRed;
 
-            Shown += (_, __) => {
-                splitMain.SplitterDistance = (int)(ClientSize.Height * 0.6);
-                splitUpper.SplitterDistance = (int)(ClientSize.Width * 0.6);
-            };
+            repoToolbar.Controls.Add(btnToggleSelect);
+            repoToolbar.Controls.Add(btnRescan);
+            repoToolbar.Controls.Add(new Label {
+                Width = 10
+            });
+            repoToolbar.Controls.Add(btnNewClone);
+            repoToolbar.Controls.Add(new Label {
+                Width = 10
+            });
+#if !BOSS_MODE && !PURE_MODE
+            repoToolbar.Controls.Add(btnRank);
+#endif
+            repoToolbar.Controls.Add(btnSuperSlim);
 
-            // === 3. 左上：仓库列表 (修改列结构) ===
             lvRepos = new ListView {
                 Dock = DockStyle.Fill,
                 View = View.Details,
                 FullRowSelect = true,
                 GridLines = true,
                 CheckBoxes = true,
-                BorderStyle = BorderStyle.None,
-                HideSelection = false
+                BorderStyle = BorderStyle.FixedSingle
             };
-            lvRepos.Columns.Add("状态", 60);
-            lvRepos.Columns.Add("当前分支", 220);
-            // [新增] 专门的同步状态列 (Index 2)
-            lvRepos.Columns.Add("同步", 100);
-            lvRepos.Columns.Add("仓库名", 200);
+            lvRepos.Columns.Add("状态", 50);
+            lvRepos.Columns.Add("当前分支", 280);
+            lvRepos.Columns.Add("仓库名", 180);
             lvRepos.Columns.Add("路径", 400);
             try {
                 var prop = typeof(Control).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
@@ -285,16 +337,14 @@ namespace GitBranchSwitcher {
             } catch {
             }
 
-            lvRepos.SelectedIndexChanged += async (_, __) => await RefreshRepoDetails();
+            grpList.Controls.Add(lvRepos);
+            grpList.Controls.Add(repoToolbar);
 
-            repoToolbar = new FlowLayoutPanel {
-                Dock = DockStyle.Top,
-                AutoSize = true,
-                FlowDirection = FlowDirection.LeftToRight,
-                Padding = new Padding(5, 8, 5, 8),
-                BackColor = Color.White
-            };
-            var btnToggleSelect = MakeBtn("✅ 全选/反选", Color.White);
+            // 放入 SplitMiddle 左部
+            splitMiddle.Panel1.Controls.Add(grpList);
+
+            // 事件
+            lvRepos.SelectedIndexChanged += async (_, __) => await RefreshRepoDetails();
             btnToggleSelect.Click += (_, __) => {
                 bool hasUn = lvRepos.Items.Cast<ListViewItem>().Any(i => !i.Checked);
                 lvRepos.BeginUpdate();
@@ -302,14 +352,7 @@ namespace GitBranchSwitcher {
                     i.Checked = hasUn;
                 lvRepos.EndUpdate();
             };
-            var btnRescan = MakeBtn("🔄 刷新列表", Color.White);
             btnRescan.Click += async (_, __) => await LoadReposForCheckedParentsAsync(true);
-            var btnPullAll = MakeBtn("⬇️ 批量拉取", Color.MintCream);
-            btnPullAll.ForeColor = Color.DarkGreen;
-            btnPullAll.Font = new Font(DefaultFont, FontStyle.Bold);
-            btnPullAll.Click += async (_, __) => await PullAllAsync();
-            var btnNewClone = MakeBtn("➕ 新建拉线", Color.Azure);
-            btnNewClone.ForeColor = Color.DarkBlue;
             btnNewClone.Click += (_, __) => {
                 var form = new CloneForm();
                 if (form.ShowDialog(this) == DialogResult.OK && form.CreatedWorkspaces.Count > 0) {
@@ -325,30 +368,14 @@ namespace GitBranchSwitcher {
                     if (c) {
                         _settings.Save();
                         SeedParentsToUi();
-                        RefilterParentsList();
                         _ = LoadReposForCheckedParentsAsync(true);
                     }
                 }
             };
-
-            repoToolbar.Controls.Add(btnToggleSelect);
-            repoToolbar.Controls.Add(btnRescan);
-            repoToolbar.Controls.Add(new Label {
-                Width = 20
-            });
-            repoToolbar.Controls.Add(btnPullAll);
-            repoToolbar.Controls.Add(btnNewClone);
 #if !BOSS_MODE && !PURE_MODE
-            var btnRank = MakeBtn("🏆 排行榜", Color.Ivory);
-            btnRank.ForeColor = Color.DarkGoldenrod;
             btnRank.Click += (_, __) => ShowLeaderboard();
-            repoToolbar.Controls.Add(btnRank);
 #endif
-            var btnSuperSlim = MakeBtn("🔥 一键瘦身", Color.MistyRose);
-            btnSuperSlim.ForeColor = Color.DarkRed;
             btnSuperSlim.Click += (_, __) => StartSuperSlimProcess();
-            repoToolbar.Controls.Add(btnSuperSlim);
-
             var listMenu = new ContextMenuStrip();
             listMenu.Items.Add("📂 打开文件夹", null, (_, __) => {
                 if (lvRepos.SelectedItems.Count > 0)
@@ -363,177 +390,106 @@ namespace GitBranchSwitcher {
             });
             lvRepos.ContextMenuStrip = listMenu;
 
-            var pnlListContainer = new Panel {
-                Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle
-            };
-            pnlListContainer.Controls.Add(lvRepos);
-            pnlListContainer.Controls.Add(repoToolbar);
-
-            // === 4. 下半部分：Fork 控制台 ===
-            grpDetails = new GroupBox {
-                Text = "控制台", Dock = DockStyle.Fill, Padding = new Padding(3), BackColor = Color.White
-            };
-            splitConsole = new SplitContainer {
-                Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 5
+            // ==========================================
+            // 3. 快捷操作 (grpActions)
+            // ==========================================
+            grpActions = new GroupBox {
+                Text = "③ 快捷操作 (Actions)", Dock = DockStyle.Fill, Padding = new Padding(10)
             };
 
-            // [左] 文件列表
-            lvFileChanges = new ListView {
-                Dock = DockStyle.Fill,
-                View = View.Details,
-                GridLines = false,
-                FullRowSelect = true,
-                BorderStyle = BorderStyle.FixedSingle,
-                HeaderStyle = ColumnHeaderStyle.Nonclickable,
-                ShowGroups = true,
-                MultiSelect = false
+            var pnlActionContent = new TableLayoutPanel {
+                Dock = DockStyle.Fill, ColumnCount = 1, AutoSize = true
             };
-            grpStaged = new ListViewGroup("staged", "已暂存 (Staged)");
-            grpUnstaged = new ListViewGroup("unstaged", "未暂存 (Unstaged)");
-            lvFileChanges.Groups.Add(grpStaged);
-            lvFileChanges.Groups.Add(grpUnstaged);
-            lvFileChanges.Columns.Add("状态", 40);
-            lvFileChanges.Columns.Add("文件路径", 600);
+            // 设置行布局
+            for (int k = 0; k < 7; k++)
+                pnlActionContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            pnlActionContent.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-            lvFileChanges.SelectedIndexChanged += async (_, __) => await ShowSelectedFileDiff();
-            lvFileChanges.DoubleClick += async (_, __) => await ToggleStagedStatus();
-
-            var fileMenu = new ContextMenuStrip();
-            fileMenu.Items.Add("➕ 加入/移出 暂存区", null, async (_, __) => await ToggleStagedStatus());
-            fileMenu.Items.Add("📂 打开目录", null, (_, __) => {
-                if (lvFileChanges.SelectedItems.Count > 0 && lvRepos.SelectedItems.Count > 0)
-                    Process.Start("explorer.exe", "/select,\"" + Path.Combine(((GitRepo)lvRepos.SelectedItems[0].Tag).Path, lvFileChanges.SelectedItems[0].SubItems[1].Text) + "\"");
-            });
-            var itemDiscard = fileMenu.Items.Add("🧨 还原 (Discard)");
-            itemDiscard.ForeColor = Color.Red;
-            itemDiscard.Click += async (_, __) => {
-                if (lvFileChanges.SelectedItems.Count == 0 || lvRepos.SelectedItems.Count == 0)
-                    return;
-                var r = (GitRepo)lvRepos.SelectedItems[0].Tag;
-                var file = lvFileChanges.SelectedItems[0].SubItems[1].Text;
-                if (lvFileChanges.SelectedItems[0].Group == grpStaged) {
-                    MessageBox.Show("请先 Unstage 再还原。");
-                    return;
-                }
-
-                if (MessageBox.Show($"丢弃 '{file}' 的修改？", "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) {
-                    await Task.Run(() => {
-                        GitHelper.RunGit(r.Path, $"checkout -- \"{file}\"", 5000);
-                        if (file.Contains("??"))
-                            GitHelper.RunGit(r.Path, $"clean -f \"{file}\"", 5000);
-                    });
-                    await RefreshRepoDetails();
-                }
-            };
-            lvFileChanges.ContextMenuStrip = fileMenu;
-            splitConsole.Panel1.Controls.Add(lvFileChanges);
-
-            // [右] 详情+操作
-            pnlDetailRight = new Panel {
-                Dock = DockStyle.Fill
-            };
-            lblRepoInfo = new Label {
-                Dock = DockStyle.Top,
-                Height = 28,
-                Text = "请选择仓库...",
-                TextAlign = ContentAlignment.MiddleLeft,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                ForeColor = Color.DarkSlateGray,
-                BackColor = Color.WhiteSmoke,
-                Padding = new Padding(5, 0, 0, 0)
-            };
-            pnlActions = new Panel {
-                Dock = DockStyle.Bottom, Height = 95, Padding = new Padding(5)
-            };
-            txtCommitMsg = new TextBox {
-                Dock = DockStyle.Top,
-                Height = 55,
-                Multiline = true,
-                ScrollBars = ScrollBars.Vertical,
-                PlaceholderText = "Commit Message...",
-                BorderStyle = BorderStyle.FixedSingle
-            };
-
-            var pnlBtns = new FlowLayoutPanel {
-                Dock = DockStyle.Bottom, Height = 32, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 3, 0, 0)
-            };
-            btnCommit = new Button {
-                Text = "Commit",
-                Width = 90,
-                Height = 28,
-                BackColor = Color.DodgerBlue,
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
-            btnCommit.FlatAppearance.BorderSize = 0;
-            btnCommit.Click += async (_, __) => await RunDetailAction("Commit");
-
-            btnPush = MakeBtn("⬆ Push", Color.AliceBlue);
-            btnPush.Height = 28;
-            btnPush.Width = 80;
-            btnPush.Click += async (_, __) => await RunDetailAction("Push");
-            btnPull = MakeBtn("⬇ Pull", Color.AliceBlue);
-            btnPull.Height = 28;
-            btnPull.Width = 80;
-            btnPull.Click += async (_, __) => await RunDetailAction("Pull");
-            btnStash = MakeBtn("📦 Stash");
-            btnStash.Height = 28;
-            btnStash.Width = 70;
-            btnStash.Click += async (_, __) => await RunDetailAction("Stash");
-
-            pnlBtns.Controls.Add(btnCommit);
-            pnlBtns.Controls.Add(new Label {
-                Width = 8
-            });
-            pnlBtns.Controls.Add(btnPush);
-            pnlBtns.Controls.Add(btnPull);
-            pnlBtns.Controls.Add(new Label {
-                Width = 8
-            });
-            pnlBtns.Controls.Add(btnStash);
-
-            pnlActions.Controls.Add(txtCommitMsg);
-            pnlActions.Controls.Add(pnlBtns);
-            rtbDiff = new RichTextBox {
-                Dock = DockStyle.Fill,
-                Font = new Font("Consolas", 9),
-                BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.Gainsboro,
-                ReadOnly = true,
-                BorderStyle = BorderStyle.None,
-                WordWrap = false
-            };
-
-            pnlDetailRight.Controls.Add(rtbDiff);
-            pnlDetailRight.Controls.Add(lblRepoInfo);
-            pnlDetailRight.Controls.Add(pnlActions);
-            splitConsole.Panel2.Controls.Add(pnlDetailRight);
-            grpDetails.Controls.Add(splitConsole);
-
-            // === 5. 右上区 ===
-            pnlRight = new Panel {
-                Dock = DockStyle.Fill, Padding = new Padding(15), BackColor = Color.White
-            };
-            var rightLayout = new TableLayoutPanel {
-                Dock = DockStyle.Top, ColumnCount = 3, AutoSize = true
-            };
-            rightLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            rightLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            rightLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             lblFetchStatus = new Label {
                 Text = "", AutoSize = true, ForeColor = Color.Magenta, Font = new Font("Segoe UI", 9, FontStyle.Italic)
             };
-            rightLayout.Controls.Add(lblFetchStatus, 0, 0);
-            rightLayout.SetColumnSpan(lblFetchStatus, 3);
             lblTargetBranch = new Label {
-                Text = "🎯 目标分支：", AutoSize = true, Anchor = AnchorStyles.Left, Font = new Font(DefaultFont, FontStyle.Bold)
+                Text = "🎯 目标分支：", AutoSize = true, Font = new Font("Segoe UI", 9, FontStyle.Bold), Margin = new Padding(0, 10, 0, 5)
+            };
+
+            var pnlComboRow = new FlowLayoutPanel {
+                AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0)
             };
             cmbTargetBranch = new ComboBox {
-                Width = 400, DropDownStyle = ComboBoxStyle.DropDown, Anchor = AnchorStyles.Left | AnchorStyles.Right, Font = new Font("Consolas", 10)
+                Width = 260, DropDownStyle = ComboBoxStyle.DropDown
             };
-            btnUseCurrentBranch = MakeBtn("👈 填入选中项");
+            btnUseCurrentBranch = MakeBtn("👈 填入");
+            pnlComboRow.Controls.Add(cmbTargetBranch);
+            pnlComboRow.Controls.Add(btnUseCurrentBranch);
+
+            btnSwitchAll = new Button {
+                Text = "🚀 一键切线 (Switch)",
+                Height = 50,
+                Dock = DockStyle.Top,
+                BackColor = Color.DodgerBlue,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold)
+            };
+            btnSwitchAll.FlatAppearance.BorderSize = 0;
+
+            chkStashOnSwitch = new CheckBox {
+                Text = "🔒 尝试 Stash 本地修改 [推荐]",
+                AutoSize = true,
+                Checked = _settings.StashOnSwitch,
+                ForeColor = Color.DarkSlateBlue,
+                Margin = new Padding(0, 10, 0, 0)
+            };
+            chkFastMode = new CheckBox {
+                Text = "⚡ 极速本地切换 (跳过 Fetch)",
+                AutoSize = true,
+                Checked = _settings.FastMode,
+                ForeColor = Color.DarkGreen,
+                Font = new Font(DefaultFont, FontStyle.Bold)
+            };
+
+            btnToggleConsole = MakeBtn("💻 打开/关闭 Git 控制台", Color.OldLace);
+            btnToggleConsole.Width = 200;
+            btnToggleConsole.Height = 35;
+            btnToggleConsole.Margin = new Padding(0, 15, 0, 0);
+
+            statePanel = new FlowLayoutPanel {
+                Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Padding = new Padding(0, 20, 0, 0)
+            };
+            pbState = new PictureBox {
+                Width = TARGET_BOX, Height = TARGET_BOX, SizeMode = PictureBoxSizeMode.CenterImage
+            };
+            lblStateText = new Label {
+                Text = "Ready", Font = new Font("Segoe UI", 14, FontStyle.Bold), AutoSize = true, ForeColor = Color.Gray
+            };
+            pbFlash = new PictureBox {
+                Width = FLASH_BOX, Height = FLASH_BOX, Visible = false, SizeMode = PictureBoxSizeMode.CenterImage
+            };
+            statePanel.Controls.Add(pbState);
+            statePanel.Controls.Add(lblStateText);
+            statePanel.Controls.Add(pbFlash);
+
+            pnlActionContent.Controls.Add(lblFetchStatus);
+            pnlActionContent.Controls.Add(lblTargetBranch);
+            pnlActionContent.Controls.Add(pnlComboRow);
+            pnlActionContent.Controls.Add(new Label {
+                Height = 10
+            });
+            pnlActionContent.Controls.Add(btnSwitchAll);
+            pnlActionContent.Controls.Add(chkStashOnSwitch);
+            pnlActionContent.Controls.Add(chkFastMode);
+            pnlActionContent.Controls.Add(btnToggleConsole);
+            pnlActionContent.Controls.Add(statePanel);
+            grpActions.Controls.Add(pnlActionContent);
+
+            // 放入 SplitMiddle 右部
+            splitMiddle.Panel2.Controls.Add(grpActions);
+
+            // 组合 SplitUpper
+            splitUpper.Panel2.Controls.Add(splitMiddle);
+
+            // 事件绑定
             btnUseCurrentBranch.Click += (_, __) => {
                 var item = lvRepos.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Checked);
                 if (item == null) {
@@ -556,53 +512,15 @@ namespace GitBranchSwitcher {
                 } catch {
                 }
             };
-            chkStashOnSwitch = new CheckBox {
-                Text = "🔒 尝试 Stash 本地修改 [推荐]",
-                AutoSize = true,
-                Checked = _settings.StashOnSwitch,
-                ForeColor = Color.DarkSlateBlue,
-                Cursor = Cursors.Hand
-            };
             chkStashOnSwitch.CheckedChanged += (_, __) => {
                 _settings.StashOnSwitch = chkStashOnSwitch.Checked;
                 _settings.Save();
-            };
-            chkFastMode = new CheckBox {
-                Text = "⚡ 极速本地切换 (跳过 Fetch/Pull)",
-                AutoSize = true,
-                Checked = _settings.FastMode,
-                ForeColor = Color.DarkGreen,
-                Font = new Font(DefaultFont, FontStyle.Bold),
-                Cursor = Cursors.Hand
             };
             chkFastMode.CheckedChanged += (_, __) => {
                 _settings.FastMode = chkFastMode.Checked;
                 _settings.Save();
             };
-            btnSwitchAll = new Button {
-                Text = "🚀 一键切线 (Switch)",
-                Height = 50,
-                Dock = DockStyle.Top,
-                BackColor = Color.DodgerBlue,
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand
-            };
-            btnSwitchAll.FlatAppearance.BorderSize = 0;
             btnSwitchAll.Click += async (_, __) => await SwitchAllAsync();
-            statePanel = new FlowLayoutPanel {
-                Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Padding = new Padding(0, 20, 0, 0)
-            };
-            pbState = new PictureBox {
-                Width = TARGET_BOX, Height = TARGET_BOX, SizeMode = PictureBoxSizeMode.CenterImage
-            };
-            lblStateText = new Label {
-                Text = "Ready", Font = new Font("Segoe UI", 14, FontStyle.Bold), AutoSize = true, ForeColor = Color.Gray
-            };
-            pbFlash = new PictureBox {
-                Width = FLASH_BOX, Height = FLASH_BOX, Visible = false, SizeMode = PictureBoxSizeMode.CenterImage
-            };
             flashTimer = new System.Windows.Forms.Timer {
                 Interval = 800
             };
@@ -610,44 +528,171 @@ namespace GitBranchSwitcher {
                 pbFlash.Visible = false;
                 flashTimer.Stop();
             };
-            statePanel.Controls.Add(pbState);
-            statePanel.Controls.Add(lblStateText);
-            statePanel.Controls.Add(pbFlash);
-            rightLayout.Controls.Add(lblTargetBranch, 0, 1);
-            rightLayout.Controls.Add(cmbTargetBranch, 1, 1);
-            rightLayout.Controls.Add(btnUseCurrentBranch, 2, 1);
-            rightLayout.Controls.Add(new Label {
-                Height = 20
-            }, 0, 2);
-            rightLayout.Controls.Add(btnSwitchAll, 0, 3);
-            rightLayout.SetColumnSpan(btnSwitchAll, 3);
-            rightLayout.Controls.Add(new Label {
-                Height = 10
-            }, 0, 4);
-            rightLayout.Controls.Add(chkStashOnSwitch, 0, 5);
-            rightLayout.SetColumnSpan(chkStashOnSwitch, 3);
-            rightLayout.Controls.Add(chkFastMode, 0, 6);
-            rightLayout.SetColumnSpan(chkFastMode, 3);
-            rightLayout.Controls.Add(statePanel, 0, 7);
-            rightLayout.SetColumnSpan(statePanel, 3);
-            pnlRight.Controls.Add(rightLayout);
 
-            // 6. 组装全局
-            splitUpper.Panel1.Controls.Add(pnlListContainer);
-            splitUpper.Panel2.Controls.Add(pnlRight);
-            splitMain.Panel1.Controls.Add(splitUpper);
-            splitMain.Panel2.Controls.Add(grpDetails);
+            // [控制台显隐逻辑]
+            btnToggleConsole.Click += (_, __) => {
+                splitBottom.Panel1Collapsed = !splitBottom.Panel1Collapsed;
+                btnToggleConsole.Text = splitBottom.Panel1Collapsed? "💻 打开 Git 控制台" : "💻 关闭 Git 控制台";
+            };
 
+            // ==========================================
+            // 4. Git 控制台 (grpDetails)
+            // ==========================================
+            grpDetails = new GroupBox {
+                Text = "④ Git 控制台 (Console)", Dock = DockStyle.Fill, Padding = new Padding(5), BackColor = Color.White
+            };
+            splitConsole = new SplitContainer {
+                Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 5
+            };
+
+            lvFileChanges = new ListView {
+                Dock = DockStyle.Fill,
+                View = View.Details,
+                GridLines = false,
+                FullRowSelect = true,
+                BorderStyle = BorderStyle.FixedSingle,
+                HeaderStyle = ColumnHeaderStyle.Nonclickable,
+                ShowGroups = true,
+                MultiSelect = false
+            };
+            grpStaged = new ListViewGroup("staged", "已暂存 (Staged)");
+            grpUnstaged = new ListViewGroup("unstaged", "未暂存 (Unstaged)");
+            lvFileChanges.Groups.Add(grpStaged);
+            lvFileChanges.Groups.Add(grpUnstaged);
+            lvFileChanges.Columns.Add("状态", 40);
+            lvFileChanges.Columns.Add("文件路径", 500);
+
+            pnlDetailRight = new Panel {
+                Dock = DockStyle.Fill
+            };
+            lblRepoInfo = new Label {
+                Dock = DockStyle.Top,
+                Height = 25,
+                Text = "请选择仓库...",
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                ForeColor = Color.DarkSlateGray,
+                BackColor = Color.WhiteSmoke
+            };
+
+            pnlActions = new Panel {
+                Dock = DockStyle.Bottom, Height = 95, Padding = new Padding(5)
+            };
+            txtCommitMsg = new TextBox {
+                Dock = DockStyle.Top,
+                Height = 55,
+                Multiline = true,
+                ScrollBars = ScrollBars.Vertical,
+                PlaceholderText = "Commit Message...",
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            var pnlBtns = new FlowLayoutPanel {
+                Dock = DockStyle.Bottom, Height = 32, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 3, 0, 0)
+            };
+            btnCommit = new Button {
+                Text = "Commit",
+                Width = 90,
+                Height = 28,
+                BackColor = Color.DodgerBlue,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnCommit.FlatAppearance.BorderSize = 0;
+            btnPush = MakeBtn("⬆ Push", Color.AliceBlue);
+            btnPush.Width = 80;
+            btnPull = MakeBtn("⬇ Pull", Color.AliceBlue);
+            btnPull.Width = 80;
+            btnStash = MakeBtn("📦 Stash");
+            btnStash.Width = 70;
+            pnlBtns.Controls.Add(btnCommit);
+            pnlBtns.Controls.Add(btnPush);
+            pnlBtns.Controls.Add(btnPull);
+            pnlBtns.Controls.Add(btnStash);
+            pnlActions.Controls.Add(txtCommitMsg);
+            pnlActions.Controls.Add(pnlBtns);
+
+            rtbDiff = new RichTextBox {
+                Dock = DockStyle.Fill,
+                Font = new Font("Consolas", 9),
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.Gainsboro,
+                ReadOnly = true,
+                BorderStyle = BorderStyle.None,
+                WordWrap = false
+            };
+
+            pnlDetailRight.Controls.Add(rtbDiff);
+            pnlDetailRight.Controls.Add(lblRepoInfo);
+            pnlDetailRight.Controls.Add(pnlActions);
+
+            splitConsole.Panel1.Controls.Add(lvFileChanges);
+            splitConsole.Panel2.Controls.Add(pnlDetailRight);
+            grpDetails.Controls.Add(splitConsole);
+
+            // Bind Console Events
+            lvFileChanges.SelectedIndexChanged += async (_, __) => await ShowSelectedFileDiff();
+            lvFileChanges.DoubleClick += async (_, __) => await ToggleStagedStatus();
+            btnCommit.Click += async (_, __) => await RunDetailAction("Commit");
+            btnPull.Click += async (_, __) => await RunDetailAction("Pull");
+            btnPush.Click += async (_, __) => await RunDetailAction("Push");
+            btnStash.Click += async (_, __) => await RunDetailAction("Stash");
+            var fileMenu = new ContextMenuStrip();
+            fileMenu.Items.Add("➕ 加入/移出 暂存区", null, async (_, __) => await ToggleStagedStatus());
+            fileMenu.Items.Add("📂 打开目录", null, (_, __) => {
+                if (lvFileChanges.SelectedItems.Count > 0 && lvRepos.SelectedItems.Count > 0)
+                    Process.Start("explorer.exe", "/select,\"" + Path.Combine(((GitRepo)lvRepos.SelectedItems[0].Tag).Path, lvFileChanges.SelectedItems[0].SubItems[1].Text) + "\"");
+            });
+            var itemDiscard = fileMenu.Items.Add("🧨 还原", null, async (_, __) => {
+                if (lvFileChanges.SelectedItems.Count == 0)
+                    return;
+                var item = lvFileChanges.SelectedItems[0];
+                if (item.Group == grpStaged) {
+                    MessageBox.Show("请先 Unstage。");
+                    return;
+                }
+
+                if (MessageBox.Show("确定丢弃修改？", "确认", MessageBoxButtons.YesNo) == DialogResult.Yes) {
+                    var r = (GitRepo)lvRepos.SelectedItems[0].Tag;
+                    await Task.Run(() => {
+                        GitHelper.RunGit(r.Path, $"checkout -- \"{item.SubItems[1].Text}\"", 5000);
+                        if (item.Text.Contains("??"))
+                            GitHelper.RunGit(r.Path, $"clean -f \"{item.SubItems[1].Text}\"", 5000);
+                    });
+                    await RefreshRepoDetails();
+                }
+            });
+            lvFileChanges.ContextMenuStrip = fileMenu;
+
+            // 放入 SplitBottom 上部
+            splitBottom.Panel1.Controls.Add(grpDetails);
+
+            // ==========================================
+            // 5. 运行日志 (grpLog)
+            // ==========================================
+            grpLog = new GroupBox {
+                Text = "⑤ 运行日志 (Logs)", Dock = DockStyle.Fill
+            };
             txtLog = new TextBox {
                 Dock = DockStyle.Fill,
-                Height = 100,
                 Multiline = true,
                 ScrollBars = ScrollBars.Both,
                 ReadOnly = true,
                 Font = new Font("Consolas", 9),
                 BackColor = Color.WhiteSmoke,
-                BorderStyle = BorderStyle.FixedSingle
+                BorderStyle = BorderStyle.None
             };
+            grpLog.Controls.Add(txtLog);
+
+            // 放入 SplitBottom 下部
+            splitBottom.Panel2.Controls.Add(grpLog);
+
+            // ==========================================
+            // 全局组装
+            // ==========================================
+            splitGlobal.Panel1.Controls.Add(splitUpper);
+            splitGlobal.Panel2.Controls.Add(splitBottom);
 
             statusStrip = new StatusStrip();
             statusLabel = new ToolStripStatusLabel("就绪") {
@@ -668,86 +713,93 @@ namespace GitBranchSwitcher {
             };
             statusStrip.Items.Add(statusProgress);
 
-            Controls.Add(splitMain);
-            Controls.Add(tlTop);
+            Controls.Add(splitGlobal);
             Controls.Add(statusStrip);
         }
 
-        // === 核心逻辑 ===
+        // === 逻辑方法 (保持原样) ===
+        private void SeedParentsToUi() {
+            if (lbParents == null)
+                return;
+            lbParents.BeginUpdate();
+            lbParents.Items.Clear();
+            foreach (var p in _settings.ParentPaths) {
+                int i = lbParents.Items.Add(p);
+                if (_checkedParents.Contains(p))
+                    lbParents.SetItemChecked(i, true);
+            }
 
-        // 在 MainForm.cs 中替换 BatchSyncStatusUpdate 方法
+            lbParents.EndUpdate();
+        }
+
+        private void RenderRepoItem(ListViewItem item) {
+            if (item == null || item.Tag == null)
+                return;
+            var repo = (GitRepo)item.Tag;
+            string display = repo.CurrentBranch;
+            if (repo.IsSyncChecked) {
+                if (!repo.HasUpstream) {
+                    display += "  ⚠️ 无远程";
+                    item.SubItems[1].ForeColor = Color.Gray;
+                } else if (repo.Incoming == 0 && repo.Outgoing == 0) {
+                    display += "  ✔ 最新";
+                    item.SubItems[1].ForeColor = Color.Green;
+                } else {
+                    string arrows = "";
+                    if (repo.Outgoing > 0)
+                        arrows += $" {repo.Outgoing}↑";
+                    if (repo.Incoming > 0)
+                        arrows += $" {repo.Incoming}↓";
+                    display += $"  {arrows}";
+                    if (repo.Incoming > 0)
+                        item.SubItems[1].ForeColor = Color.Red;
+                    else
+                        item.SubItems[1].ForeColor = Color.Blue;
+                }
+            } else {
+                item.SubItems[1].ForeColor = Color.Black;
+            }
+
+            item.SubItems[1].Text = display;
+        }
 
         private async Task BatchSyncStatusUpdate() {
             if (lvRepos.Items.Count == 0)
                 return;
-
             var targetItems = new List<ListViewItem>();
             foreach (ListViewItem i in lvRepos.Items)
                 targetItems.Add(i);
-
-            // 更新底部状态栏提示
-            BeginInvoke((Action)(() => statusLabel.Text = "正在分析同步状态..."));
-
+            statusLabel.Text = "正在后台扫描同步状态...";
             await Task.Run(() => {
                 var opts = new ParallelOptions {
                     MaxDegreeOfParallelism = 10
                 };
-
                 Parallel.ForEach(targetItems, opts, (item) => {
                     var repo = (GitRepo)item.Tag;
-
-                    // 调用新版 GetSyncCounts (返回可空类型)
                     var syncResult = GitHelper.GetSyncCounts(repo.Path);
+                    repo.IsSyncChecked = true;
+                    if (syncResult == null) {
+                        repo.HasUpstream = false;
+                        repo.Incoming = 0;
+                        repo.Outgoing = 0;
+                    } else {
+                        repo.HasUpstream = true;
+                        repo.Incoming = syncResult.Value.behind;
+                        repo.Outgoing = syncResult.Value.ahead;
+                    }
 
                     try {
-                        BeginInvoke((Action)(() => {
-                            if (syncResult == null) {
-                                // 没找到远程分支 (通常是新分支)
-                                item.SubItems[2].Text = "⚠️ 无远程";
-                                item.SubItems[2].ForeColor = Color.Gray;
-                                repo.Incoming = 0;
-                                repo.Outgoing = 0;
-                            } else {
-                                var (behind, ahead) = syncResult.Value;
-                                repo.Incoming = behind;
-                                repo.Outgoing = ahead;
-
-                                if (behind == 0 && ahead == 0) {
-                                    // [优化] 完全同步时显示对勾
-                                    item.SubItems[2].Text = "✔ 最新";
-                                    item.SubItems[2].ForeColor = Color.Green;
-                                } else {
-                                    // 有差异
-                                    string syncText = "";
-                                    if (ahead > 0)
-                                        syncText += $"{ahead}↑ ";
-                                    if (behind > 0)
-                                        syncText += $"{behind}↓";
-
-                                    item.SubItems[2].Text = syncText.Trim();
-
-                                    // 颜色逻辑：落后显示红(需拉取)，领先显示蓝(需推送)，都有显示紫
-                                    if (behind > 0 && ahead > 0)
-                                        item.SubItems[2].ForeColor = Color.Purple;
-                                    else if (behind > 0)
-                                        item.SubItems[2].ForeColor = Color.Red;
-                                    else
-                                        item.SubItems[2].ForeColor = Color.Blue;
-                                }
-                            }
-                        }));
+                        BeginInvoke((Action)(() => RenderRepoItem(item)));
                     } catch {
                     }
                 });
             });
-
             BeginInvoke((Action)(() => statusLabel.Text = "就绪"));
         }
+
         private async Task RefreshRepoDetails() {
-            // 初始化比例
             if (splitConsole.SplitterDistance < 50)
                 splitConsole.SplitterDistance = (int)(splitConsole.Width * 0.4);
-
             if (lvRepos.SelectedItems.Count == 0) {
                 grpDetails.Enabled = false;
                 lblRepoInfo.Text = "请选择一个仓库...";
@@ -759,16 +811,18 @@ namespace GitBranchSwitcher {
             grpDetails.Enabled = true;
             var item = lvRepos.SelectedItems[0];
             var repo = (GitRepo)item.Tag;
-
             lblRepoInfo.Text = $"📂 {repo.Name}  /  📍 {repo.CurrentBranch}";
-
             await Task.Run(() => {
                 var changes = GitHelper.GetFileChanges(repo.Path);
-                var data = GitHelper.GetSyncCounts(repo.Path);
-                var behind = data.Value.behind;
-                var ahead = data.Value.ahead;
-                repo.Incoming = behind;
-                repo.Outgoing = ahead;
+                var syncResult = GitHelper.GetSyncCounts(repo.Path);
+                repo.IsSyncChecked = true;
+                if (syncResult != null) {
+                    repo.HasUpstream = true;
+                    repo.Incoming = syncResult.Value.behind;
+                    repo.Outgoing = syncResult.Value.ahead;
+                } else {
+                    repo.HasUpstream = false;
+                }
 
                 BeginInvoke((Action)(() => {
                     lvFileChanges.BeginUpdate();
@@ -806,24 +860,11 @@ namespace GitBranchSwitcher {
                     if (lvFileChanges.Columns[1].Width < 300)
                         lvFileChanges.Columns[1].Width = 300;
                     lvFileChanges.EndUpdate();
-
-                    btnPull.Text = behind > 0? $"⬇ {behind}" : "⬇ Pull";
-                    btnPull.Enabled = behind > 0;
-                    btnPush.Text = ahead > 0? $"⬆ {ahead}" : "⬆ Push";
-                    btnPush.Enabled = ahead > 0;
+                    btnPull.Text = repo.Incoming > 0? $"⬇ {repo.Incoming}" : "⬇ Pull";
+                    btnPush.Text = repo.Outgoing > 0? $"⬆ {repo.Outgoing}" : "⬆ Push";
                     btnCommit.Enabled = stagedCount > 0;
                     btnCommit.Text = stagedCount > 0? $"Commit ({stagedCount})" : "Commit";
-
-                    // 顺便更新一下列表里的同步状态
-                    string syncText = "";
-                    if (ahead > 0)
-                        syncText += $"{ahead}↑ ";
-                    if (behind > 0)
-                        syncText += $"{behind}↓";
-                    if (string.IsNullOrEmpty(syncText))
-                        syncText = "—";
-                    item.SubItems[2].Text = syncText;
-                    item.SubItems[2].ForeColor = behind > 0? Color.Red : (ahead > 0? Color.Blue : Color.Gray);
+                    RenderRepoItem(item);
                 }));
             });
         }
@@ -839,7 +880,6 @@ namespace GitBranchSwitcher {
             string filePath = fileItem.SubItems[1].Text;
             bool isStaged = (fileItem.Group == grpStaged);
             bool isUntracked = fileItem.Text.Contains("??") || fileItem.Text.Contains("A") && !isStaged;
-
             await Task.Run(() => {
                 string diffContent = GitHelper.GetFileDiff(repo.Path, filePath, isStaged, isUntracked);
                 BeginInvoke((Action)(() => ColorizeDiff(diffContent)));
@@ -891,7 +931,6 @@ namespace GitBranchSwitcher {
                 return;
             var repo = (GitRepo)lvRepos.SelectedItems[0].Tag;
             pnlActions.Enabled = false;
-
             try {
                 if (action == "Commit") {
                     string msg = txtCommitMsg.Text.Trim();
@@ -925,7 +964,6 @@ namespace GitBranchSwitcher {
             }
         }
 
-        // === 关键逻辑 ===
         private async Task LoadReposForCheckedParentsAsync(bool forceRescan = false) {
             _loadCts?.Cancel();
             _loadCts = new System.Threading.CancellationTokenSource();
@@ -964,9 +1002,8 @@ namespace GitBranchSwitcher {
                     foreach (var (name, path, parentName) in finalRepos) {
                         var r = new GitRepo(name, path);
                         string display = name == "Root"? $"[{parentName}] (根)" : $"[{parentName}] {name}";
-                        // [Fix] Add 5 items
                         lvRepos.Items.Add(new ListViewItem(new[] {
-                            "⏳", "—", "...", display, path
+                            "⏳", "—", display, path
                         }) {
                             Tag = r, Checked = true
                         });
@@ -1020,9 +1057,8 @@ namespace GitBranchSwitcher {
                 foreach (var item in kvp.Value) {
                     var r = new GitRepo(item.Name, item.FullPath);
                     string display = item.Name == "Root"? $"[{Path.GetFileName(kvp.Key)}] (根)" : $"[{Path.GetFileName(kvp.Key)}] {item.Name}";
-                    // [Fix] Add 5 items
                     lvRepos.Items.Add(new ListViewItem(new[] {
-                        "⏳", "—", "...", display, item.FullPath
+                        "⏳", "—", display, item.FullPath
                     }) {
                         Tag = r, Checked = true
                     });
@@ -1051,7 +1087,7 @@ namespace GitBranchSwitcher {
                 BeginInvoke((Action)(() => {
                     lvRepos.BeginUpdate();
                     foreach (ListViewItem item in lvRepos.Items)
-                        item.SubItems[1].Text = ((GitRepo)item.Tag).CurrentBranch;
+                        RenderRepoItem(item);
                     lvRepos.EndUpdate();
                     RefreshBranchesAsync();
                     _ = AutoFetchAndRefreshAsync(token);
@@ -1096,7 +1132,130 @@ namespace GitBranchSwitcher {
             }
         }
 
-        // ... (其余方法保持不变) ...
+        private async Task RefreshBranchesAsync() {
+            if (lvRepos == null || lvRepos.IsDisposed || lvRepos.Items.Count == 0)
+                return;
+            var targetPaths = new List<string>();
+            foreach (ListViewItem item in lvRepos.Items) {
+                if (item.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                    targetPaths.Add(r.Path);
+            }
+
+            var all = new HashSet<string>();
+            var tasks = new List<Task<IEnumerable<string>>>();
+            foreach (var path in targetPaths)
+                tasks.Add(Task.Run(() => GitHelper.GetAllBranches(path)));
+            try {
+                var results = await Task.WhenAll(tasks);
+                foreach (var list in results)
+                    if (list != null)
+                        foreach (var b in list)
+                            all.Add(b);
+            } catch (Exception ex) {
+                Log($"Err: {ex.Message}");
+            }
+
+            _allBranches = all.OrderBy(x => x).ToList();
+            if (_allBranches.Count > 0) {
+                if (_settings.CachedBranchList == null)
+                    _settings.CachedBranchList = new List<string>();
+                _settings.CachedBranchList = _allBranches;
+                _settings.Save();
+            }
+
+            if (cmbTargetBranch != null && !cmbTargetBranch.IsDisposed)
+                UpdateBranchDropdown();
+        }
+
+        private void UpdateBranchDropdown() {
+            try {
+                if (cmbTargetBranch == null || cmbTargetBranch.IsDisposed)
+                    return;
+                string currentText = cmbTargetBranch.Text;
+                cmbTargetBranch.BeginUpdate();
+                cmbTargetBranch.Items.Clear();
+                var src = _allBranches?.ToList() ?? new List<string>();
+                var list = string.IsNullOrEmpty(currentText)? src : src.Where(b => b != null && b.IndexOf(currentText, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+                foreach (var b in list.Take(500))
+                    cmbTargetBranch.Items.Add(b);
+                cmbTargetBranch.EndUpdate();
+                cmbTargetBranch.Text = currentText;
+                if (!string.IsNullOrEmpty(currentText)) {
+                    cmbTargetBranch.SelectionStart = currentText.Length;
+                }
+
+                if (list.Count > 0 && cmbTargetBranch.Focused && !string.IsNullOrEmpty(currentText)) {
+                    cmbTargetBranch.DroppedDown = true;
+                    Cursor.Current = Cursors.Default;
+                }
+            } catch {
+            }
+        }
+
+        private async Task SwitchAllAsync() {
+            var target = cmbTargetBranch.Text.Trim();
+            if (string.IsNullOrEmpty(target)) {
+                MessageBox.Show("请输入分支名");
+                return;
+            }
+
+            var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
+            if (!items.Any())
+                return;
+            btnSwitchAll.Enabled = false;
+            statusProgress.Visible = true;
+            SetSwitchState(SwitchState.Switching);
+            foreach (var i in items) {
+                i.Text = "⏳";
+                i.SubItems[1].Text = "...";
+            }
+
+            var batchSw = Stopwatch.StartNew();
+            foreach (var item in items) {
+                tasks.Add(Task.Run(async () => {
+                    await sem.WaitAsync();
+                    var r = (GitRepo)item.Tag;
+                    var sw = Stopwatch.StartNew();
+                    try {
+                        var res = GitHelper.SwitchAndPull(r.Path, target, _settings.StashOnSwitch, _settings.FastMode);
+                        r.SwitchOk = res.ok;
+                        r.LastMessage = res.message;
+                        r.CurrentBranch = GitHelper.GetFriendlyBranch(r.Path);
+                    } finally {
+                        sw.Stop();
+                        sem.Release();
+                    }
+
+                    BeginInvoke((Action)(() => {
+                        item.Text = (r.SwitchOk? "✅" : "❌") + $" {sw.Elapsed.TotalSeconds:F1}s";
+                        item.SubItems[1].Text = r.CurrentBranch;
+                        Log($"[{r.Name}] {r.LastMessage?.Replace("\n", " ")}");
+                        if (r.SwitchOk) {
+                            ApplyImageTo(pbFlash, "flash_success", FLASH_BOX);
+                            pbFlash.Visible = true;
+                            flashTimer.Start();
+                        }
+
+                        statusLabel.Text = $"处理中 {++done}/{items.Count}";
+                    }));
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+            batchSw.Stop();
+#if !BOSS_MODE && !PURE_MODE
+            if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(batchSw.Elapsed.TotalSeconds, 0);
+                UpdateStatsUi(nc, nt, ns);
+            }
+#endif
+            SetSwitchState(SwitchState.Done);
+            statusProgress.Visible = false;
+            btnSwitchAll.Enabled = true;
+            statusLabel.Text = "完成";
+            Log("🏁 全部完成");
+        }
+
         private void TrySetRuntimeIcon() {
             try {
                 var icon = ImageHelper.LoadIconFromResource("appicon");
@@ -1144,35 +1303,6 @@ namespace GitBranchSwitcher {
                 ApplyImageTo(pbState, "state_done", TARGET_BOX);
                 lblStateText.Text = "搞定!";
             }
-        }
-
-        private void SeedParentsToUi() {
-            if (lbParents == null)
-                return;
-            lbParents.BeginUpdate();
-            lbParents.Items.Clear();
-            foreach (var p in _settings.ParentPaths) {
-                int i = lbParents.Items.Add(p);
-                if (_checkedParents.Contains(p))
-                    lbParents.SetItemChecked(i, true);
-            }
-
-            lbParents.EndUpdate();
-        }
-
-        private void RefilterParentsList() {
-            lbParents.BeginUpdate();
-            lbParents.Items.Clear();
-            var kw = txtSearch.Text.Trim();
-            foreach (var p in _settings.ParentPaths) {
-                if (string.IsNullOrEmpty(kw) || p.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0) {
-                    int i = lbParents.Items.Add(p);
-                    if (_checkedParents.Contains(p))
-                        lbParents.SetItemChecked(i, true);
-                }
-            }
-
-            lbParents.EndUpdate();
         }
 
         private void UpdateStatsUi(int totalCount = -1, double totalSeconds = -1, long totalSpace = -1) {
@@ -1438,173 +1568,5 @@ namespace GitBranchSwitcher {
         }
 
         private void Log(string s) => txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}\r\n");
-
-        private async Task PullAllAsync() {
-            var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
-            if (!items.Any()) {
-                MessageBox.Show("请先勾选需要拉取的仓库！");
-                return;
-            }
-
-            repoToolbar.Enabled = false;
-            btnSwitchAll.Enabled = false;
-            statusProgress.Visible = true;
-            statusLabel.Text = "正在批量拉取...";
-            Log("=== 开始批量 Pull ===");
-            int finishCount = 0;
-            var pullTasks = new List<Task>();
-            var batchSw = Stopwatch.StartNew();
-            foreach (var item in items) {
-                pullTasks.Add(Task.Run(async () => {
-                    await sem.WaitAsync();
-                    var r = (GitRepo)item.Tag;
-                    try {
-                        BeginInvoke((Action)(() => {
-                            item.Text = "⏳";
-                        }));
-                        var res = GitHelper.PullCurrentBranch(r.Path);
-                        BeginInvoke((Action)(() => {
-                            item.Text = res.ok? "✅" : "❌";
-                            Log($"[{r.Name}] {r.CurrentBranch}: {res.message}");
-                            statusLabel.Text = $"拉取中 {++finishCount}/{items.Count}";
-                        }));
-                    } finally {
-                        sem.Release();
-                    }
-                }));
-            }
-
-            await Task.WhenAll(pullTasks);
-            batchSw.Stop();
-            statusProgress.Visible = false;
-            repoToolbar.Enabled = true;
-            btnSwitchAll.Enabled = true;
-            statusLabel.Text = $"拉取完成，耗时 {batchSw.Elapsed.TotalSeconds:F1}s";
-            Log($"🏁 批量拉取结束");
-        }
-
-        private async Task SwitchAllAsync() {
-            var target = cmbTargetBranch.Text.Trim();
-            if (string.IsNullOrEmpty(target)) {
-                MessageBox.Show("请输入分支名");
-                return;
-            }
-
-            var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
-            if (!items.Any())
-                return;
-            btnSwitchAll.Enabled = false;
-            statusProgress.Visible = true;
-            SetSwitchState(SwitchState.Switching);
-            foreach (var i in items) {
-                i.Text = "⏳";
-                i.SubItems[1].Text = "...";
-            }
-
-            var batchSw = Stopwatch.StartNew();
-            foreach (var item in items) {
-                tasks.Add(Task.Run(async () => {
-                    await sem.WaitAsync();
-                    var r = (GitRepo)item.Tag;
-                    var sw = Stopwatch.StartNew();
-                    try {
-                        var res = GitHelper.SwitchAndPull(r.Path, target, _settings.StashOnSwitch, _settings.FastMode);
-                        r.SwitchOk = res.ok;
-                        r.LastMessage = res.message;
-                        r.CurrentBranch = GitHelper.GetFriendlyBranch(r.Path);
-                    } finally {
-                        sw.Stop();
-                        sem.Release();
-                    }
-
-                    BeginInvoke((Action)(() => {
-                        item.Text = (r.SwitchOk? "✅" : "❌") + $" {sw.Elapsed.TotalSeconds:F1}s";
-                        item.SubItems[1].Text = r.CurrentBranch;
-                        Log($"[{r.Name}] {r.LastMessage?.Replace("\n", " ")}");
-                        if (r.SwitchOk) {
-                            ApplyImageTo(pbFlash, "flash_success", FLASH_BOX);
-                            pbFlash.Visible = true;
-                            flashTimer.Start();
-                        }
-
-                        statusLabel.Text = $"处理中 {++done}/{items.Count}";
-                    }));
-                }));
-            }
-
-            await Task.WhenAll(tasks);
-            batchSw.Stop();
-#if !BOSS_MODE && !PURE_MODE
-            if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(batchSw.Elapsed.TotalSeconds, 0);
-                UpdateStatsUi(nc, nt, ns);
-            }
-#endif
-            SetSwitchState(SwitchState.Done);
-            statusProgress.Visible = false;
-            btnSwitchAll.Enabled = true;
-            statusLabel.Text = "完成";
-            Log("🏁 全部完成");
-        }
-
-        private async Task RefreshBranchesAsync() {
-            if (lvRepos == null || lvRepos.IsDisposed || lvRepos.Items.Count == 0)
-                return;
-            var targetPaths = new List<string>();
-            foreach (ListViewItem item in lvRepos.Items) {
-                if (item.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
-                    targetPaths.Add(r.Path);
-            }
-
-            var all = new HashSet<string>();
-            var tasks = new List<Task<IEnumerable<string>>>();
-            foreach (var path in targetPaths)
-                tasks.Add(Task.Run(() => GitHelper.GetAllBranches(path)));
-            try {
-                var results = await Task.WhenAll(tasks);
-                foreach (var list in results)
-                    if (list != null)
-                        foreach (var b in list)
-                            all.Add(b);
-            } catch (Exception ex) {
-                Log($"Err: {ex.Message}");
-            }
-
-            _allBranches = all.OrderBy(x => x).ToList();
-            if (_allBranches.Count > 0) {
-                if (_settings.CachedBranchList == null)
-                    _settings.CachedBranchList = new List<string>();
-                _settings.CachedBranchList = _allBranches;
-                _settings.Save();
-            }
-
-            if (cmbTargetBranch != null && !cmbTargetBranch.IsDisposed)
-                UpdateBranchDropdown();
-        }
-
-        private void UpdateBranchDropdown() {
-            try {
-                if (cmbTargetBranch == null || cmbTargetBranch.IsDisposed)
-                    return;
-                string currentText = cmbTargetBranch.Text;
-                cmbTargetBranch.BeginUpdate();
-                cmbTargetBranch.Items.Clear();
-                var src = _allBranches?.ToList() ?? new List<string>();
-                var list = string.IsNullOrEmpty(currentText)? src : src.Where(b => b != null && b.IndexOf(currentText, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
-                foreach (var b in list.Take(500))
-                    cmbTargetBranch.Items.Add(b);
-                cmbTargetBranch.EndUpdate();
-                cmbTargetBranch.Text = currentText;
-                if (!string.IsNullOrEmpty(currentText)) {
-                    cmbTargetBranch.SelectionStart = currentText.Length;
-                }
-
-                if (list.Count > 0 && cmbTargetBranch.Focused && !string.IsNullOrEmpty(currentText)) {
-                    cmbTargetBranch.DroppedDown = true;
-                    Cursor.Current = Cursors.Default;
-                }
-            } catch {
-            }
-        }
     }
 }
