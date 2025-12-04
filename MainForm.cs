@@ -784,7 +784,7 @@ namespace GitBranchSwitcher {
 
             // 需求1：如果本地有修改，当前分支颜色变绿色
             if (repo.IsDirty)
-                item.SubItems[1].ForeColor = Color.DarkOliveGreen;
+                item.SubItems[1].ForeColor = Color.ForestGreen;
             else
                 item.SubItems[1].ForeColor = Color.Black;
 
@@ -1303,7 +1303,7 @@ namespace GitBranchSwitcher {
                 var item = items.FirstOrDefault(x => x.Tag == result.Repo);
                 if (item != null) {
                     item.Text = (result.Success? "✅" : "❌") + $" {result.DurationSeconds:F1}s";
-                    item.SubItems[1].Text = result.Repo.CurrentBranch;
+                    RenderRepoItem(item);                    
                     // 确保 Log 方法线程安全（WinForms TextBox 本身需要 Invoke，但在 Progress 回调里通常安全）
                     Log($"[{result.Repo.Name}] {result.Message?.Replace("\n", " ")}");
                 }

@@ -58,6 +58,23 @@ namespace GitBranchSwitcher
                         repo.SwitchOk = ok;
                         repo.LastMessage = msg;
                         repo.CurrentBranch = currentBranch;
+                        
+                        var changes = GitHelper.GetFileChanges(repo.Path);
+                        repo.IsDirty = (changes.Count > 0);
+                        var syncResult = GitHelper.GetSyncCounts(repo.Path);
+                        repo.IsSyncChecked = true;
+                        if (syncResult != null)
+                        {
+                            repo.HasUpstream = true;
+                            repo.Incoming = syncResult.Value.behind;
+                            repo.Outgoing = syncResult.Value.ahead;
+                        }
+                        else
+                        {
+                            repo.HasUpstream = false;
+                            repo.Incoming = 0;
+                            repo.Outgoing = 0;
+                        }
                     }
                     catch (Exception ex)
                     {
