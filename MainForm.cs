@@ -23,6 +23,7 @@ namespace GitBranchSwitcher {
         private SplitContainer splitUpper;
         private SplitContainer splitMiddle;
         private Form consoleWindow;          // [新增] 独立的控制台窗口
+        private Form? _leaderboardForm = null;
         private TableLayoutPanel layoutMain; // 如果不用 SplitContainer 全局布局，备用
 
         // === 控件定义 ===
@@ -1478,6 +1479,14 @@ namespace GitBranchSwitcher {
         }
 
         private async void ShowLeaderboard() {
+            // [优化 1] 检查是否已打开，如果已打开则直接激活
+            if (_leaderboardForm != null && !_leaderboardForm.IsDisposed) {
+                if (_leaderboardForm.WindowState == FormWindowState.Minimized)
+                    _leaderboardForm.WindowState = FormWindowState.Normal;
+                _leaderboardForm.BringToFront();
+                _leaderboardForm.Activate();
+                return;
+            }
             if (string.IsNullOrEmpty(_settings.LeaderboardPath)) {
                 string input = ShowInputBox("设置", "请输入共享文件路径:", _settings.LeaderboardPath);
                 if (string.IsNullOrWhiteSpace(input))
@@ -1487,8 +1496,12 @@ namespace GitBranchSwitcher {
                 LeaderboardService.SetPath(input);
             }
 
-            var form = new Form {
-                Text = "👑 卷王 & 摸鱼王 & 瘦身王 排行榜", Width = 1000, Height = 500, StartPosition = FormStartPosition.CenterParent
+            _leaderboardForm = new Form {
+                Text = "👑 卷王 & 摸鱼王 & 瘦身王 排行榜", 
+                Width = 1000, 
+                Height = 500, 
+                StartPosition = FormStartPosition.CenterScreen,
+                Icon = this.Icon // 继承主图标
             };
             var table = new TableLayoutPanel {
                 Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1
@@ -1524,9 +1537,9 @@ namespace GitBranchSwitcher {
                 Font = new Font(DefaultFont, FontStyle.Bold),
                 Text = "正在加载数据..."
             };
-            form.Controls.Add(table);
-            form.Controls.Add(lblMy);
-            form.Shown += async (_, __) => {
+            _leaderboardForm.Controls.Add(table);
+            _leaderboardForm.Controls.Add(lblMy);
+            _leaderboardForm.Shown += async (_, __) => {
                 var data = await LeaderboardService.GetLeaderboardAsync();
                 var sortedCount = data.OrderByDescending(x => x.TotalSwitches).ToList();
                 for (int i = 0; i < sortedCount.Count; i++) {
@@ -1583,7 +1596,7 @@ namespace GitBranchSwitcher {
                     lblMy.Text = "暂无数据";
                 }
             };
-            form.ShowDialog(this);
+            _leaderboardForm.Show();
         }
 
         private async void StartSuperSlimProcess() {
