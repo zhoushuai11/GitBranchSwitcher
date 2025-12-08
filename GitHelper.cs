@@ -354,7 +354,7 @@ namespace GitBranchSwitcher {
             Step("> Prune remote...");
             RunGit(repoPath, "remote prune origin", 60_000);
 
-            string args = aggressive? "gc --prune=now --aggressive --window=50" : "gc --prune=now";
+            string args = aggressive ? "gc --prune=now --aggressive" : "gc --prune=now";
             Step($"> 执行 GC ({args})...");
             var (code, stdout, stderr) = RunGit(repoPath, args, -1);
 
