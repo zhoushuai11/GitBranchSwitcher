@@ -754,6 +754,27 @@ namespace GitBranchSwitcher {
             // 确保顺序：先加 StatusStrip (Bottom)，再加 splitGlobal (Fill)
             Controls.Add(statusStrip);
             Controls.Add(splitGlobal);
+            
+            // [新增] 双击优化：独占勾选 + 自动填入当前分支
+            lvRepos.DoubleClick += (_, __) => {
+                if (lvRepos.SelectedItems.Count == 0) return;
+                
+                var item = lvRepos.SelectedItems[0];
+                var repo = (GitRepo)item.Tag;
+
+                // 1. 独占勾选：取消其他所有项的勾选，只勾选当前双击的这一项
+                lvRepos.BeginUpdate();
+                foreach (ListViewItem i in lvRepos.Items) {
+                    i.Checked = (i == item);
+                }
+                lvRepos.EndUpdate();
+
+                // 2. 自动将该仓库的“当前分支”填入“目标分支”输入框
+                // 这样点击“一键切线”时，就相当于对该仓库执行 Reset/Pull
+                if (!string.IsNullOrEmpty(repo.CurrentBranch) && repo.CurrentBranch != "—") {
+                    cmbTargetBranch.Text = repo.CurrentBranch;
+                }
+            };
         }
 
         // === 逻辑方法 (保持原样) ===
