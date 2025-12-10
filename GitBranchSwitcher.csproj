@@ -9,8 +9,8 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.1.3.0</AssemblyVersion>
-        <FileVersion>1.1.3.0</FileVersion>
+        <AssemblyVersion>1.1.5.0</AssemblyVersion>
+        <FileVersion>1.1.5.0</FileVersion>
 
         <IsBetaMode>false</IsBetaMode>
 
@@ -22,7 +22,7 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 修复皮呀反馈的排行榜界面点击问题。
+            1. 一键瘦身改为快速瘦身。
         </ReleaseNote>
 
         <DeployRootPath>H:\GitFleetManagerProjectRoot\GitRankData</DeployRootPath>

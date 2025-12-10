@@ -1619,7 +1619,7 @@ namespace GitBranchSwitcher {
                     totalRepos++;
                     Log($" >>> [清理中] {repoInfo.Name} ...");
                     statusLabel.Text = $"正在瘦身: {repoInfo.Name}";
-                    var (ok, log, sizeStr, saved) = await Task.Run(() => GitHelper.GarbageCollect(repoInfo.FullPath, true));
+                    var (ok, log, sizeStr, saved) = await Task.Run(() => GitHelper.GarbageCollect(repoInfo.FullPath, false));
                     if (ok) {
                         totalSavedBytes += saved;
                         Log($"[成功] {repoInfo.Name}: 减小 {sizeStr}");

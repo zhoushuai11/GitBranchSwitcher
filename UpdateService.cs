@@ -70,44 +70,51 @@ namespace GitBranchSwitcher
             catch { }
         }
 
-        private static void PerformUpdate(string remoteExePath)
-        {
+        private static void PerformUpdate(string remoteExePath) {
             string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
-            if (string.IsNullOrEmpty(currentExe)) return;
+            if (string.IsNullOrEmpty(currentExe))
+                return;
+
+            // [新增] 获取当前进程的文件名（例如 GitBranchSwitcher.exe）
+            string exeName = Path.GetFileName(currentExe);
 
             string appDir = AppDomain.CurrentDomain.BaseDirectory;
-            // 使用 .cmd 后缀
             string batchPath = Path.Combine(appDir, $"update_{Guid.NewGuid().ToString("N")}.cmd");
-            
+
             var batContent = new StringBuilder();
-            
-            // [关键修复 1] 切换 CMD 代码页到 UTF-8，防止中文路径乱码
+
             batContent.AppendLine("@chcp 65001 >NUL");
             batContent.AppendLine("@echo off");
-            
-            // 等待主进程完全退出
-            batContent.AppendLine("timeout /t 1 /nobreak >NUL"); 
-            
-            // [关键修复 2] 复制文件 (加引号防止路径空格问题)
+
+            // [关键修改 1] 强制结束所有同名进程
+            // /F: 强制终止
+            // /IM: 指定映像名称
+            // >NUL 2>&1: 屏蔽输出，防止如果没有其他进程时报错干扰
+            batContent.AppendLine($"taskkill /F /IM \"{exeName}\" >NUL 2>&1");
+
+            // [关键修改 2] 稍微延长等待时间，确保操作系统释放文件句柄
+            batContent.AppendLine("timeout /t 2 /nobreak >NUL");
+
+            // 循环尝试复制（防止杀进程后句柄释放延迟导致的偶尔失败）
+            batContent.AppendLine(":TRY_COPY");
             batContent.AppendLine($"copy /Y \"{remoteExePath}\" \"{currentExe}\"");
-            
+            batContent.AppendLine("if %errorlevel% neq 0 (");
+            batContent.AppendLine("    timeout /t 1 /nobreak >NUL");
+            batContent.AppendLine("    goto TRY_COPY");
+            batContent.AppendLine(")");
+
             // 启动更新后的程序
             batContent.AppendLine($"start \"\" \"{currentExe}\"");
-            
+
             // 删除脚本自身
             batContent.AppendLine($"del \"%~f0\"");
 
-            // [关键修复 3] 必须使用 UTF8 (无 BOM) 格式保存，配合 chcp 65001
             File.WriteAllText(batchPath, batContent.ToString(), new UTF8Encoding(false));
 
-            var psi = new ProcessStartInfo
-            {
-                FileName = batchPath,
-                UseShellExecute = true, // 必须为 true 才能隐藏窗口
-                CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden
+            var psi = new ProcessStartInfo {
+                FileName = batchPath, UseShellExecute = true, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden
             };
-            
+
             Process.Start(psi);
             Application.Exit();
         }
