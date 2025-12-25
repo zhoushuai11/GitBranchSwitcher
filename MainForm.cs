@@ -352,11 +352,29 @@ namespace GitBranchSwitcher {
             // 事件
             lvRepos.SelectedIndexChanged += async (_, __) => await RefreshRepoDetails();
             btnToggleSelect.Click += (_, __) => {
+                // 1. 执行原有的全选/反选逻辑
                 bool hasUn = lvRepos.Items.Cast<ListViewItem>().Any(i => !i.Checked);
                 lvRepos.BeginUpdate();
                 foreach (ListViewItem i in lvRepos.Items)
                     i.Checked = hasUn;
                 lvRepos.EndUpdate();
+
+                // 2. [新增功能] 如果是执行“全选”操作 (hasUn为true)，计算众数分支并填入
+                if (hasUn) {
+                    // 使用 LINQ 统计出现次数最多的分支名
+                    var topBranch = lvRepos.Items.Cast<ListViewItem>()
+                        .Select(i => ((GitRepo)i.Tag).CurrentBranch) // 获取每个仓库的当前分支
+                        .Where(b => !string.IsNullOrEmpty(b) && b != "—") // 排除无效分支
+                        .GroupBy(b => b) // 按分支名分组
+                        .OrderByDescending(g => g.Count()) // 按数量降序排列
+                        .Select(g => g.Key) // 取分支名
+                        .FirstOrDefault(); // 取第一个（最多的那个）
+
+                    // 如果找到了有效分支，自动填入目标框
+                    if (!string.IsNullOrEmpty(topBranch)) {
+                        cmbTargetBranch.Text = topBranch;
+                    }
+                }
             };
             btnRescan.Click += async (_, __) => await LoadReposForCheckedParentsAsync(true);
             btnNewClone.Click += (_, __) => {
