@@ -50,6 +50,7 @@ namespace GitBranchSwitcher {
         private ComboBox cmbTargetBranch;
         private Button btnSwitchAll, btnUseCurrentBranch, btnToggleConsole;
         private CheckBox chkStashOnSwitch, chkFastMode;
+        private CheckBox chkConfirmOnSwitch; // [新增]
         private FlowLayoutPanel statePanel;
         private PictureBox pbState, pbFlash;
         private Label lblStateText;
@@ -472,7 +473,18 @@ namespace GitBranchSwitcher {
                 ForeColor = Color.DarkGreen,
                 Font = new Font(DefaultFont, FontStyle.Bold)
             };
-
+            // [新增] 二次确认选项
+            chkConfirmOnSwitch = new CheckBox {
+                Text = "🛡️ 开启切线二次确认弹窗",
+                AutoSize = true,
+                Checked = _settings.ConfirmOnSwitch,
+                ForeColor = Color.DarkRed, // 用深红色提醒
+                Margin = new Padding(0, 5, 0, 0)
+            };
+            chkConfirmOnSwitch.CheckedChanged += (_, __) => {
+                _settings.ConfirmOnSwitch = chkConfirmOnSwitch.Checked;
+                _settings.Save();
+            };
             btnToggleConsole = MakeBtn("💻 打开/关闭 Git 控制台", Color.OldLace);
             btnToggleConsole.Width = 200;
             btnToggleConsole.Height = 35;
@@ -503,6 +515,7 @@ namespace GitBranchSwitcher {
             pnlActionContent.Controls.Add(btnSwitchAll);
             pnlActionContent.Controls.Add(chkStashOnSwitch);
             pnlActionContent.Controls.Add(chkFastMode);
+            pnlActionContent.Controls.Add(chkConfirmOnSwitch);
             pnlActionContent.Controls.Add(btnToggleConsole);
             pnlActionContent.Controls.Add(statePanel);
             grpActions.Controls.Add(pnlActionContent);
@@ -1320,6 +1333,12 @@ namespace GitBranchSwitcher {
                 MessageBox.Show("请输入分支名");
                 return;
             }
+            
+            if (_settings.ConfirmOnSwitch) {
+                // 如果用户点击了取消，直接返回，不执行后续逻辑
+                if (!ShowSwitchConfirmDialog(target))
+                    return;
+            }
 
             var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
             if (!items.Any())
@@ -1701,6 +1720,80 @@ namespace GitBranchSwitcher {
             return new List<string>();
         }
 
+        private bool ShowSwitchConfirmDialog(string targetBranch) {
+            using var form = new Form {
+                Text = "⚠️ 高危操作确认",
+                Width = 450,
+                Height = 280,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.White
+            };
+
+            var lblTitle = new Label {
+                Text = "您即将执行一键切线操作，目标分支：",
+                AutoSize = true,
+                Location = new Point(25, 25),
+                Font = new Font("Segoe UI", 10),
+                ForeColor = Color.DimGray
+            };
+
+            // [重点] 目标分支 加粗加大
+            var lblBranch = new Label {
+                Text = targetBranch,
+                AutoSize = true,
+                Location = new Point(25, 60),
+                Font = new Font("Segoe UI", 16, FontStyle.Bold), // 大字体
+                ForeColor = Color.Crimson // 醒目的颜色
+            };
+
+            var lblHint = new Label {
+                Text = "此操作将影响所有选中的仓库，请确认无误。",
+                AutoSize = true,
+                Location = new Point(25, 110),
+                Font = new Font("Segoe UI", 9, FontStyle.Italic),
+                ForeColor = Color.Gray
+            };
+
+            var btnOk = new Button {
+                Text = "🚀 确认切线",
+                DialogResult = DialogResult.OK,
+                Width = 160,
+                Height = 50,
+                Location = new Point(40, 160),
+                BackColor = Color.ForestGreen, // 鲜艳的绿色
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnOk.FlatAppearance.BorderSize = 0;
+
+            var btnCancel = new Button {
+                Text = "❌ 取消",
+                DialogResult = DialogResult.Cancel,
+                Width = 160,
+                Height = 50,
+                Location = new Point(220, 160),
+                BackColor = Color.IndianRed, // 鲜艳的红色
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnCancel.FlatAppearance.BorderSize = 0;
+
+            form.Controls.AddRange(new Control[] { lblTitle, lblBranch, lblHint, btnOk, btnCancel });
+            form.AcceptButton = btnOk;
+            form.CancelButton = btnCancel;
+
+            return form.ShowDialog(this) == DialogResult.OK;
+        }
+        
         private void Log(string s) => txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}\r\n");
     }
+    
+    
 }

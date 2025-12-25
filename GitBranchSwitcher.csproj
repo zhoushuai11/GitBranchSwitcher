@@ -9,8 +9,8 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.1.6.0</AssemblyVersion>
-        <FileVersion>1.1.6.0</FileVersion>
+        <AssemblyVersion>1.1.7.0</AssemblyVersion>
+        <FileVersion>1.1.7.0</FileVersion>
 
         <IsBetaMode>false</IsBetaMode>
 
@@ -22,7 +22,7 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 点击全选的时候，自动填入数量最多的分支（黄斌反馈）。
+            1. 增加老年人选项（黄斌反馈）。
         </ReleaseNote>
 
         <DeployRootPath>H:\GitFleetManagerProjectRoot\GitRankData</DeployRootPath>

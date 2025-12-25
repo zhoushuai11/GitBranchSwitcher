@@ -24,6 +24,7 @@ namespace GitBranchSwitcher
     {
         public bool StashOnSwitch { get; set; } = true;
         public bool FastMode { get; set; } = false;
+        public bool ConfirmOnSwitch { get; set; } = false;
         public int MaxParallel { get; set; } = 16;
         
         public List<string> ParentPaths { get; set; } = new List<string>();
