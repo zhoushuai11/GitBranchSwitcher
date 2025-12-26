@@ -1323,12 +1323,12 @@ namespace GitBranchSwitcher {
 
                 statusLabel.Text = $"处理中 {result.ProgressIndex}/{result.TotalCount}";
             });
-
             double totalSeconds = await _workflowService.SwitchReposAsync(targetRepos, target, _settings.StashOnSwitch, _settings.FastMode, progressHandler);
 
 #if !BOSS_MODE && !PURE_MODE
             if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0);
+                // [修改] 这里只上传时间，第三个参数传 null，表示不更新卡片数
+                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0, null);
                 UpdateStatsUi(nc, nt, ns);
             }
 #endif
@@ -1546,7 +1546,6 @@ namespace GitBranchSwitcher {
             // 使用网络共享路径
             string baseLibPath = Path.Combine(_settings.UpdateSourcePath, "Img");
 
-            // 如果目录不存在，尝试创建（通常网络路径没权限创建根目录，但子目录可能可以）
             if (!Directory.Exists(baseLibPath)) {
                 try {
                     Directory.CreateDirectory(baseLibPath);
@@ -1562,7 +1561,6 @@ namespace GitBranchSwitcher {
 
             if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath)) {
                 try {
-                    // 读取远程图片
                     using (var fs = new FileStream(imagePath, FileMode.Open, FileAccess.Read)) {
                         pbState.Image = Image.FromStream(fs);
                     }
@@ -1576,23 +1574,23 @@ namespace GitBranchSwitcher {
                     string rarityLabel = rarity == Rarity.UR? "🌟UR🌟" : rarity.ToString();
                     string msg = $"带回了: {displayName} [{rarityLabel}]";
 
-                    // 检查去重
-                    if (!_myCollection.Contains(fileName)) {
+                    // 核心修改逻辑：无论是否新卡，只要触发了抽卡，都可以尝试同步一次总数（或者仅在新卡时同步）
+                    // 为了保险，建议每次获得新卡时，强制同步一次“当前总数量”
+                    bool isNew = !_myCollection.Contains(fileName);
+                    if (isNew) {
                         _myCollection.Add(fileName);
-                        // 保存到共享目录
                         CollectionService.Save(_settings.UpdateSourcePath, Environment.UserName, _myCollection);
-
                         msg += " (NEW!)";
-#if !BOSS_MODE && !PURE_MODE
-                        if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                            await LeaderboardService.UploadMyScoreAsync(0, 0, 1);
-                        }
-#endif
                     }
 
+#if !BOSS_MODE && !PURE_MODE
+                    // [关键修改] 传入 _myCollection.Count (当前总数)，而不是 1
+                    if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                        await LeaderboardService.UploadMyScoreAsync(0, 0, _myCollection.Count);
+                    }
+#endif
                     lblStateText.Text = msg;
 
-                    // 闪光特效
                     if (rarity == Rarity.SSR || rarity == Rarity.UR) {
                         var originalColor = statePanel.BackColor;
                         statePanel.BackColor = Color.Gold;
@@ -1611,7 +1609,6 @@ namespace GitBranchSwitcher {
             } else {
                 lblStateText.Text = $"🐸 去了{rarity}区但空手而归...";
                 lblStateText.ForeColor = Color.Gray;
-                // 如果没抽到图，显示“完成”状态图
                 ApplyImageTo(pbState, "state_done");
             }
         }
