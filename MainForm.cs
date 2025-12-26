@@ -99,13 +99,13 @@ namespace GitBranchSwitcher {
         // 欧皇池 (切线 >= 5 个)：原版概率
         private readonly Dictionary<Rarity, int> _rarityWeightsHigh = new Dictionary<Rarity, int> {
             {
-                Rarity.N, 50
+                Rarity.N, 625
             }, {
-                Rarity.R, 30
+                Rarity.R, 125
             }, {
-                Rarity.SR, 15
+                Rarity.SR, 25
             }, {
-                Rarity.SSR, 4
+                Rarity.SSR, 5
             }, {
                 Rarity.UR, 1
             } // 有 1% 几率出 UR
@@ -114,12 +114,12 @@ namespace GitBranchSwitcher {
         // 非酋池 (切线 < 5 个)：概率降低，UR 绝迹
         private readonly Dictionary<Rarity, int> _rarityWeightsLow = new Dictionary<Rarity, int> {
             {
-                Rarity.N, 65
+                Rarity.N, 625
             }, // N 卡概率大增
             {
-                Rarity.R, 30
+                Rarity.R, 125
             }, {
-                Rarity.SR, 4
+                Rarity.SR, 25
             }, // SR 只有 4%
             {
                 Rarity.SSR, 1
@@ -145,13 +145,13 @@ namespace GitBranchSwitcher {
         // 稀有度分数 (欧气值)
         private readonly Dictionary<Rarity, int> _rarityScores = new Dictionary<Rarity, int> {
             {
-                Rarity.UR, 100
+                Rarity.UR, 625
             }, {
-                Rarity.SSR, 30
+                Rarity.SSR, 125
             }, {
-                Rarity.SR, 10
+                Rarity.SR, 25
             }, {
-                Rarity.R, 3
+                Rarity.R, 5
             }, {
                 Rarity.N, 1
             }
@@ -1379,7 +1379,7 @@ namespace GitBranchSwitcher {
                 Text = targetBranch,
                 AutoSize = true,
                 Location = new Point(25, 60),
-                Font = new Font("Segoe UI", 20, FontStyle.Bold),
+                Font = new Font("Segoe UI", 16, FontStyle.Bold),
                 ForeColor = Color.Crimson
             };
             var lblHint = new Label {
