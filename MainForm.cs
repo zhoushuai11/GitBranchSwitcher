@@ -11,46 +11,63 @@ using System.Text;
 
 namespace GitBranchSwitcher {
     public partial class MainForm : Form {
-        // ... (变量定义与之前类似) ...
+        // ==========================================
+        // 布局容器
+        // ==========================================
         private GroupBox grpTop, grpList, grpActions;
         private SplitContainer splitGlobal, splitUpper, splitMiddle;
         private Form consoleWindow;
         private Form? _leaderboardForm = null;
 
+        // ==========================================
+        // 控件定义
+        // ==========================================
+        // 1. 顶部工程区
         private CheckedListBox lbParents;
         private Button btnAddParent, btnRemoveParent;
+
+        // 2. 仓库列表区
         private ListView lvRepos;
         private FlowLayoutPanel repoToolbar;
+
+        // 3. 快捷操作区
         private Label lblTargetBranch, lblFetchStatus;
         private ComboBox cmbTargetBranch;
-
-        private Button btnSwitchAll, btnUseCurrentBranch, btnToggleConsole;
-
-        // [新增] 藏品按钮
-        private Button btnMyCollection;
+        private Button btnSwitchAll, btnUseCurrentBranch, btnToggleConsole, btnMyCollection;
         private CheckBox chkStashOnSwitch, chkFastMode, chkConfirmOnSwitch;
 
+        // 状态与动画区
         private FlowLayoutPanel statePanel;
         private PictureBox pbState;
         private Label lblStateText;
         private System.Windows.Forms.Timer flashTimer;
 
-        // [修改] 图片改小一点，不占太大空间
+        // 默认图片大小
         private const int DEFAULT_IMG_SIZE = 180;
 
-        private GroupBox grpDetails, grpLog;
+        // 4. Git 控制台
+        private GroupBox grpDetails;
         private SplitContainer splitConsole;
         private ListView lvFileChanges;
         private RichTextBox rtbDiff;
         private Panel pnlDetailRight, pnlActions;
         private Label lblRepoInfo;
-        private TextBox txtCommitMsg, txtLog;
+        private TextBox txtCommitMsg;
         private Button btnCommit, btnPull, btnPush, btnStash;
         private ListViewGroup grpStaged, grpUnstaged;
+
+        // 5. 日志区
+        private GroupBox grpLog;
+        private TextBox txtLog;
+
+        // 底部状态栏
         private StatusStrip statusStrip;
         private ToolStripStatusLabel statusLabel, statusStats;
         private ToolStripProgressBar statusProgress;
 
+        // ==========================================
+        // 数据与逻辑对象
+        // ==========================================
         private readonly BindingList<GitRepo> _repos = new BindingList<GitRepo>();
         private List<string> _allBranches = new List<string>();
         private AppSettings _settings;
@@ -58,7 +75,9 @@ namespace GitBranchSwitcher {
         private int _loadSeq = 0;
         private HashSet<string> _checkedParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private GitWorkflowService _workflowService;
-        private List<string> _myCollection = new List<string>();
+
+        // 本地内存缓存
+        private List<CollectedItem> _myCollection = new List<CollectedItem>();
 
         private enum SwitchState {
             NotStarted,
@@ -66,6 +85,7 @@ namespace GitBranchSwitcher {
             Done
         }
 
+        // === 🐸 青蛙旅行 & 抽卡系统 ===
         private enum Rarity {
             N,
             R,
@@ -74,7 +94,10 @@ namespace GitBranchSwitcher {
             UR
         }
 
-        private readonly Dictionary<Rarity, int> _rarityWeights = new Dictionary<Rarity, int> {
+        // [修改] 1. 定义两套概率表
+
+        // 欧皇池 (切线 >= 5 个)：原版概率
+        private readonly Dictionary<Rarity, int> _rarityWeightsHigh = new Dictionary<Rarity, int> {
             {
                 Rarity.N, 50
             }, {
@@ -85,7 +108,24 @@ namespace GitBranchSwitcher {
                 Rarity.SSR, 4
             }, {
                 Rarity.UR, 1
-            }
+            } // 有 1% 几率出 UR
+        };
+
+        // 非酋池 (切线 < 5 个)：概率降低，UR 绝迹
+        private readonly Dictionary<Rarity, int> _rarityWeightsLow = new Dictionary<Rarity, int> {
+            {
+                Rarity.N, 65
+            }, // N 卡概率大增
+            {
+                Rarity.R, 30
+            }, {
+                Rarity.SR, 4
+            }, // SR 只有 4%
+            {
+                Rarity.SSR, 1
+            }, {
+                Rarity.UR, 0
+            } // 无法获得 UR
         };
 
         private readonly Dictionary<Rarity, Color> _rarityColors = new Dictionary<Rarity, Color> {
@@ -102,9 +142,25 @@ namespace GitBranchSwitcher {
             }
         };
 
+        // 稀有度分数 (欧气值)
+        private readonly Dictionary<Rarity, int> _rarityScores = new Dictionary<Rarity, int> {
+            {
+                Rarity.UR, 100
+            }, {
+                Rarity.SSR, 30
+            }, {
+                Rarity.SR, 10
+            }, {
+                Rarity.R, 3
+            }, {
+                Rarity.N, 1
+            }
+        };
+
         public MainForm() {
             _settings = AppSettings.Load();
-            // [修改] 传入共享根目录加载藏品
+
+            // 加载我的藏品
             _myCollection = CollectionService.Load(_settings.UpdateSourcePath, Environment.UserName);
 
             InitializeComponent();
@@ -156,8 +212,8 @@ namespace GitBranchSwitcher {
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             string vStr = $"{version.Major}.{version.Minor}.{version.Build}";
             Text = $"Git 分支管理工具 - v{vStr}";
-            Width = 1783;
-            Height = 1137;
+            Width = 1800;
+            Height = 1150;
             StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.BackColor = Color.WhiteSmoke;
@@ -181,7 +237,7 @@ namespace GitBranchSwitcher {
         }
 
         private void InitUi() {
-            // ... (Top和List布局保持不变，省略以节省空间，直接看 grpActions) ...
+            // === 全局布局容器 ===
             splitGlobal = new SplitContainer {
                 Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterWidth = 6
             };
@@ -192,6 +248,9 @@ namespace GitBranchSwitcher {
                 Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 6
             };
 
+            // ==========================================
+            // 1. 工程区 (grpTop)
+            // ==========================================
             grpTop = new GroupBox {
                 Text = "① 工程区 (Project Workspace)", Dock = DockStyle.Fill, Padding = new Padding(10)
             };
@@ -200,6 +259,7 @@ namespace GitBranchSwitcher {
             };
             pnlTopContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             pnlTopContent.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
             lbParents = new CheckedListBox {
                 Dock = DockStyle.Fill,
                 CheckOnClick = true,
@@ -226,6 +286,7 @@ namespace GitBranchSwitcher {
             pnlTopContent.Controls.Add(lbParents, 0, 0);
             pnlTopContent.Controls.Add(pnlTopBtns, 1, 0);
             grpTop.Controls.Add(pnlTopContent);
+
             var cm = new ContextMenuStrip();
             cm.Items.Add("添加父目录…", null, (_, __) => btnAddParent.PerformClick());
             cm.Items.Add("移除选中", null, (_, __) => btnRemoveParent.PerformClick());
@@ -285,6 +346,9 @@ namespace GitBranchSwitcher {
             };
             splitUpper.Panel1.Controls.Add(grpTop);
 
+            // ==========================================
+            // 2. 仓库列表 (grpList)
+            // ==========================================
             grpList = new GroupBox {
                 Text = "② 仓库列表 (Repositories)", Dock = DockStyle.Fill, Padding = new Padding(5)
             };
@@ -301,6 +365,7 @@ namespace GitBranchSwitcher {
 #endif
             var btnSuperSlim = MakeBtn("🔥 一键瘦身", Color.MistyRose);
             btnSuperSlim.ForeColor = Color.DarkRed;
+
             repoToolbar.Controls.Add(btnToggleSelect);
             repoToolbar.Controls.Add(btnRescan);
             repoToolbar.Controls.Add(new Label {
@@ -314,6 +379,7 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnRank);
 #endif
             repoToolbar.Controls.Add(btnSuperSlim);
+
             lvRepos = new ListView {
                 Dock = DockStyle.Fill,
                 View = View.Details,
@@ -336,7 +402,9 @@ namespace GitBranchSwitcher {
             grpList.Controls.Add(lvRepos);
             grpList.Controls.Add(repoToolbar);
             splitMiddle.Panel1.Controls.Add(grpList);
+
             lvRepos.SelectedIndexChanged += async (_, __) => await RefreshRepoDetails();
+
             btnToggleSelect.Click += (_, __) => {
                 bool hasUn = lvRepos.Items.Cast<ListViewItem>().Any(i => !i.Checked);
                 lvRepos.BeginUpdate();
@@ -374,6 +442,7 @@ namespace GitBranchSwitcher {
             btnRank.Click += (_, __) => ShowLeaderboard();
 #endif
             btnSuperSlim.Click += (_, __) => StartSuperSlimProcess();
+
             var listMenu = new ContextMenuStrip();
             listMenu.Items.Add("📂 打开文件夹", null, (_, __) => {
                 if (lvRepos.SelectedItems.Count > 0)
@@ -472,20 +541,17 @@ namespace GitBranchSwitcher {
             btnToggleConsole.Height = 32;
             btnToggleConsole.Dock = DockStyle.Top;
 
-            // [新增] 藏品按钮，放在控制台按钮下面
             btnMyCollection = MakeBtn("🖼️ 我的藏品 (Album)", Color.LavenderBlush);
             btnMyCollection.Height = 32;
             btnMyCollection.Dock = DockStyle.Top;
             btnMyCollection.Click += (_, __) => new CollectionForm().Show();
 
-            // 包装一下按钮，增加间距
             var pnlBtnsWrap = new Panel {
                 Height = 70, Dock = DockStyle.Top, Padding = new Padding(0, 6, 0, 0)
             };
             pnlBtnsWrap.Controls.Add(btnMyCollection);
-            pnlBtnsWrap.Controls.Add(btnToggleConsole); // Dock Top，所以 Console 在 MyCollection 上面
+            pnlBtnsWrap.Controls.Add(btnToggleConsole);
 
-            // 状态展示区
             statePanel = new FlowLayoutPanel {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.TopDown,
@@ -503,7 +569,7 @@ namespace GitBranchSwitcher {
                     if (newWidth < 100)
                         newWidth = 100;
                     if (newWidth > 350)
-                        newWidth = 350; // 限制最大宽度，防止太大
+                        newWidth = 350;
                     pbState.Size = new Size(newWidth, newWidth);
                     AdjustPbSizeMode(pbState);
                 } catch {
@@ -514,7 +580,6 @@ namespace GitBranchSwitcher {
             menuFrog.Items.Add("🖼️ 查看我的藏品 (Album)", null, (_, __) => new CollectionForm().Show());
             menuFrog.Items.Add(new ToolStripSeparator());
             menuFrog.Items.Add("📂 打开图库目录 (Img)", null, (_, __) => {
-                // 使用网络共享路径
                 string path = Path.Combine(_settings.UpdateSourcePath, "Img");
                 try {
                     Process.Start("explorer.exe", path);
@@ -543,7 +608,7 @@ namespace GitBranchSwitcher {
             statePanel.Controls.Add(lblStateText);
 
             pnlActionContent.Controls.Add(statePanel);
-            pnlActionContent.Controls.Add(pnlBtnsWrap); // 按钮组
+            pnlActionContent.Controls.Add(pnlBtnsWrap);
             pnlActionContent.Controls.Add(chkConfirmOnSwitch);
             pnlActionContent.Controls.Add(chkFastMode);
             pnlActionContent.Controls.Add(chkStashOnSwitch);
@@ -603,6 +668,9 @@ namespace GitBranchSwitcher {
                 }
             };
 
+            // ==========================================
+            // 4. Git 控制台 (grpDetails)
+            // ==========================================
             grpDetails = new GroupBox {
                 Text = "④ Git 控制台 (Console)", Dock = DockStyle.Fill, Padding = new Padding(5), BackColor = Color.White
             };
@@ -796,7 +864,7 @@ namespace GitBranchSwitcher {
             };
         }
 
-        // ... (RenderRepoItem, BatchSyncStatusUpdate 等不变，省略) ...
+        // ... (SeedParentsToUi, RenderRepoItem, BatchSyncStatusUpdate 等逻辑) ...
         private void SeedParentsToUi() {
             if (lbParents == null)
                 return;
@@ -1289,7 +1357,331 @@ namespace GitBranchSwitcher {
             }
         }
 
-        // === 核心逻辑修改：SwitchAllAsync ===
+        private bool ShowSwitchConfirmDialog(string targetBranch) {
+            using var form = new Form {
+                Text = "⚠️ 高危操作确认",
+                Width = 450,
+                Height = 280,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.White
+            };
+            var lblTitle = new Label {
+                Text = "您即将执行一键切线操作，目标分支：",
+                AutoSize = true,
+                Location = new Point(25, 25),
+                Font = new Font("Segoe UI", 10),
+                ForeColor = Color.DimGray
+            };
+            var lblBranch = new Label {
+                Text = targetBranch,
+                AutoSize = true,
+                Location = new Point(25, 60),
+                Font = new Font("Segoe UI", 20, FontStyle.Bold),
+                ForeColor = Color.Crimson
+            };
+            var lblHint = new Label {
+                Text = "此操作将影响所有选中的仓库，请确认无误。",
+                AutoSize = true,
+                Location = new Point(25, 110),
+                Font = new Font("Segoe UI", 9, FontStyle.Italic),
+                ForeColor = Color.Gray
+            };
+            var btnOk = new Button {
+                Text = "🚀 确认切线",
+                DialogResult = DialogResult.OK,
+                Width = 160,
+                Height = 50,
+                Location = new Point(40, 160),
+                BackColor = Color.ForestGreen,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnOk.FlatAppearance.BorderSize = 0;
+            var btnCancel = new Button {
+                Text = "❌ 取消",
+                DialogResult = DialogResult.Cancel,
+                Width = 160,
+                Height = 50,
+                Location = new Point(220, 160),
+                BackColor = Color.IndianRed,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnCancel.FlatAppearance.BorderSize = 0;
+            form.Controls.AddRange(new Control[] {
+                lblTitle, lblBranch, lblHint, btnOk, btnCancel
+            });
+            form.AcceptButton = btnOk;
+            form.CancelButton = btnCancel;
+            return form.ShowDialog(this) == DialogResult.OK;
+        }
+
+        private void AdjustPbSizeMode(PictureBox pb) {
+            if (pb.Image == null)
+                return;
+            if (pb.Image.Width > pb.Width || pb.Image.Height > pb.Height) {
+                pb.SizeMode = PictureBoxSizeMode.Zoom;
+            } else {
+                pb.SizeMode = PictureBoxSizeMode.CenterImage;
+            }
+        }
+
+        // 启动旅行动画
+        private void StartFrogTravel() {
+            ApplyImageTo(pbState, "state_switching");
+            lblStateText.Text = "🐸 呱呱去旅行了...";
+            lblStateText.ForeColor = Color.ForestGreen;
+        }
+
+        // [修改] 抽卡核心逻辑：支持传入 RepoCount 调整概率，且 SSR/UR 优先未收录
+        private async Task FinishFrogTravelAndDrawCard(int repoCount) {
+            string baseLibPath = Path.Combine(_settings.UpdateSourcePath, "Img");
+
+            if (!Directory.Exists(baseLibPath)) {
+                try {
+                    Directory.CreateDirectory(baseLibPath);
+                    foreach (var r in Enum.GetNames(typeof(Rarity)))
+                        Directory.CreateDirectory(Path.Combine(baseLibPath, r));
+                } catch {
+                }
+            }
+
+            // 1. 决定稀有度
+            var rarity = RollRarity(repoCount);
+            string rarityPath = Path.Combine(baseLibPath, rarity.ToString());
+
+            // [关键修改] 调用带优先级的选图逻辑
+            string imagePath = GetImageWithPriority(rarityPath, rarity);
+
+            if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath)) {
+                try {
+                    using (var fs = new FileStream(imagePath, FileMode.Open, FileAccess.Read)) {
+                        pbState.Image = Image.FromStream(fs);
+                    }
+
+                    AdjustPbSizeMode(pbState);
+
+                    string fileName = Path.GetFileName(imagePath);
+                    string displayName = Path.GetFileNameWithoutExtension(fileName);
+
+                    lblStateText.ForeColor = _rarityColors.ContainsKey(rarity)? _rarityColors[rarity] : Color.Black;
+                    string rarityLabel = rarity == Rarity.UR? "🌟UR🌟" : rarity.ToString();
+                    string msg = $"带回了: {displayName} [{rarityLabel}]";
+
+                    // 2. 判断是否新卡
+                    bool isNew = !_myCollection.Any(x => string.Equals(x.FileName, fileName, StringComparison.OrdinalIgnoreCase));
+                    if (isNew) {
+                        int score = _rarityScores.ContainsKey(rarity)? _rarityScores[rarity] : 1;
+                        var newItem = new CollectedItem {
+                            FileName = fileName, Rarity = rarity.ToString(), Score = score, CollectTime = DateTime.Now
+                        };
+                        _myCollection.Add(newItem);
+                        CollectionService.Save(_settings.UpdateSourcePath, Environment.UserName, _myCollection);
+                        msg += " (NEW!)";
+                    }
+
+                    // 3. 计算当前总分并上传
+                    int totalScore = _myCollection.Sum(x => x.Score);
+
+#if !BOSS_MODE && !PURE_MODE
+                    if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                        await LeaderboardService.UploadMyScoreAsync(0, 0, _myCollection.Count, totalScore);
+                    }
+#endif
+                    lblStateText.Text = msg;
+
+                    // 闪光特效
+                    if (rarity == Rarity.SSR || rarity == Rarity.UR) {
+                        var originalColor = statePanel.BackColor;
+                        statePanel.BackColor = Color.Gold;
+                        flashTimer.Start();
+                        await Task.Delay(500);
+                        statePanel.BackColor = originalColor;
+                        await Task.Delay(200);
+                        statePanel.BackColor = Color.Gold;
+                        await Task.Delay(500);
+                        statePanel.BackColor = originalColor;
+                    }
+                } catch (Exception ex) {
+                    lblStateText.Text = "明信片污损了...";
+                    Log($"Load Image Error: {ex.Message}");
+                }
+            } else {
+                lblStateText.Text = $"🐸 去了{rarity}区但空手而归...";
+                lblStateText.ForeColor = Color.Gray;
+                ApplyImageTo(pbState, "state_done");
+            }
+        }
+
+        // [核心修改] 根据 repoCount 切换概率表
+        private Rarity RollRarity(int repoCount) {
+            // 如果仓库数 >= 5，使用欧皇池；否则使用非酋池
+            var weights = (repoCount >= 5)? _rarityWeightsHigh : _rarityWeightsLow;
+
+            int totalWeight = weights.Values.Sum();
+            int roll = new Random().Next(0, totalWeight);
+            int current = 0;
+            foreach (var kvp in weights) {
+                current += kvp.Value;
+                if (roll < current)
+                    return kvp.Key;
+            }
+
+            return Rarity.N;
+        } 
+        
+        // [新增] 智能选图逻辑：SSR 和 UR 优先获取未收集的图片
+        private string GetImageWithPriority(string folderPath, Rarity rarity) {
+            if (!Directory.Exists(folderPath))
+                return null;
+
+            // 获取该稀有度下的所有图片
+            var files = Directory.GetFiles(folderPath, "*.*").Where(f => f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".gif", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            if (files.Count == 0)
+                return null;
+
+            // === 核心逻辑 ===
+            // 只有 SSR 和 UR 启用"防重机制"
+            if (rarity == Rarity.SSR || rarity == Rarity.UR) {
+                // 1. 找出当前用户已拥有的该稀有度的图片文件名
+                var collectedNames = new HashSet<string>(_myCollection.Select(c => c.FileName), StringComparer.OrdinalIgnoreCase);
+
+                // 2. 筛选出未收集的图片
+                var uncollectedFiles = files.Where(f => !collectedNames.Contains(Path.GetFileName(f))).ToList();
+
+                // 3. 如果有未收集的，优先从中随机抽取一张
+                if (uncollectedFiles.Count > 0) {
+                    return uncollectedFiles[new Random().Next(uncollectedFiles.Count)];
+                }
+                // 如果全都收集齐了，则进入下面的逻辑（随机重复卡）
+            }
+
+            // N, R, SR 或者 高稀有度已全收集：完全随机
+            return files[new Random().Next(files.Count)];
+        }
+
+        private async void ShowLeaderboard() {
+            if (_leaderboardForm != null && !_leaderboardForm.IsDisposed) {
+                if (_leaderboardForm.WindowState == FormWindowState.Minimized)
+                    _leaderboardForm.WindowState = FormWindowState.Normal;
+                _leaderboardForm.BringToFront();
+                _leaderboardForm.Activate();
+                return;
+            }
+
+            if (string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                string input = ShowInputBox("设置", "请输入共享文件路径:", _settings.LeaderboardPath);
+                if (string.IsNullOrWhiteSpace(input))
+                    return;
+                _settings.LeaderboardPath = input;
+                _settings.Save();
+                LeaderboardService.SetPath(input);
+            }
+
+            _leaderboardForm = new Form {
+                Text = "👑 卷王 & 摸鱼王 & 欧皇排行榜",
+                Width = 1000,
+                Height = 500,
+                StartPosition = FormStartPosition.CenterScreen,
+                Icon = this.Icon
+            };
+            var table = new TableLayoutPanel {
+                Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1
+            };
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
+
+            var listCount = new ListView {
+                Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
+            };
+            listCount.Columns.Add("排名", 40);
+            listCount.Columns.Add("用户", 180);
+            listCount.Columns.Add("次数", 60);
+            var listDuration = new ListView {
+                Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
+            };
+            listDuration.Columns.Add("排名", 40);
+            listDuration.Columns.Add("用户", 180);
+            listDuration.Columns.Add("时长", 80);
+            var listCollection = new ListView {
+                Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
+            };
+            listCollection.Columns.Add("排名", 40);
+            listCollection.Columns.Add("欧皇", 180);
+            listCollection.Columns.Add("欧气(张)", 80);
+
+            table.Controls.Add(listCount, 0, 0);
+            table.Controls.Add(listDuration, 1, 0);
+            table.Controls.Add(listCollection, 2, 0);
+            var lblMy = new Label {
+                Dock = DockStyle.Bottom,
+                Height = 40,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font(DefaultFont, FontStyle.Bold),
+                Text = "正在加载数据..."
+            };
+            _leaderboardForm.Controls.Add(table);
+            _leaderboardForm.Controls.Add(lblMy);
+
+            _leaderboardForm.Shown += async (_, __) => {
+                var data = await LeaderboardService.GetLeaderboardAsync();
+
+                var sortedCount = data.OrderByDescending(x => x.TotalSwitches).ToList();
+                for (int i = 0; i < sortedCount.Count; i++) {
+                    var u = sortedCount[i];
+                    string name = u.Name;
+                    if (i == 0)
+                        name = $"🥇 {u.Name} (🌭切线王)";
+                    listCount.Items.Add(new ListViewItem(new[] {
+                        (i + 1).ToString(), name, u.TotalSwitches.ToString()
+                    }));
+                }
+
+                var sortedTime = data.OrderByDescending(x => x.TotalDuration).ToList();
+                for (int i = 0; i < sortedTime.Count; i++) {
+                    var u = sortedTime[i];
+                    string name = u.Name;
+                    if (i == 0)
+                        name = $"👑 {u.Name} (🐟摸鱼王)";
+                    listDuration.Items.Add(new ListViewItem(new[] {
+                        (i + 1).ToString(), name, FormatDuration(u.TotalDuration)
+                    }));
+                }
+
+                var sortedColl = data.OrderByDescending(x => x.TotalCollectionScore).ThenByDescending(x => x.TotalCardsCollected).ToList();
+                int rank = 1;
+                for (int i = 0; i < sortedColl.Count; i++) {
+                    var u = sortedColl[i];
+                    if (u.TotalCollectionScore <= 0 && u.TotalCardsCollected <= 0)
+                        continue;
+                    string name = u.Name;
+                    if (rank == 1)
+                        name = $"🐶 {u.Name} (狗运王)";
+                    listCollection.Items.Add(new ListViewItem(new[] {
+                        rank.ToString(), name, $"{u.TotalCollectionScore} ({u.TotalCardsCollected})"
+                    }));
+                    rank++;
+                }
+
+                var me = data.FirstOrDefault(x => x.Name == Environment.UserName);
+                if (me != null) {
+                    lblMy.Text = $"我：切线{me.TotalSwitches}次 | 摸鱼{FormatDuration(me.TotalDuration)} | 欧气{me.TotalCollectionScore}分";
+                } else {
+                    lblMy.Text = "暂无数据";
+                }
+            };
+            _leaderboardForm.Show();
+        }
+
         private async Task SwitchAllAsync() {
             var target = cmbTargetBranch.Text.Trim();
             if (string.IsNullOrEmpty(target)) {
@@ -1310,7 +1702,6 @@ namespace GitBranchSwitcher {
             btnSwitchAll.Enabled = false;
             statusProgress.Visible = true;
 
-            // [新增] 1. 开始切线：播放“旅行中”动画
             StartFrogTravel();
 
             var progressHandler = new Progress<RepoSwitchResult>(result => {
@@ -1323,17 +1714,18 @@ namespace GitBranchSwitcher {
 
                 statusLabel.Text = $"处理中 {result.ProgressIndex}/{result.TotalCount}";
             });
+
             double totalSeconds = await _workflowService.SwitchReposAsync(targetRepos, target, _settings.StashOnSwitch, _settings.FastMode, progressHandler);
 
 #if !BOSS_MODE && !PURE_MODE
             if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                // [修改] 这里只上传时间，第三个参数传 null，表示不更新卡片数
-                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0, null);
+                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0, null, null);
                 UpdateStatsUi(nc, nt, ns);
             }
 #endif
-            // [新增] 2. 切线完成：结算抽卡
-            await FinishFrogTravelAndDrawCard();
+
+            // [核心修改] 传入本次切线的仓库数量
+            await FinishFrogTravelAndDrawCard(targetRepos.Count);
 
             statusProgress.Visible = false;
             btnSwitchAll.Enabled = true;
@@ -1457,293 +1849,7 @@ namespace GitBranchSwitcher {
             return sb.ToString().Trim();
         }
 
-        private bool ShowSwitchConfirmDialog(string targetBranch) {
-            using var form = new Form {
-                Text = "⚠️ 高危操作确认",
-                Width = 450,
-                Height = 280,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                StartPosition = FormStartPosition.CenterParent,
-                MaximizeBox = false,
-                MinimizeBox = false,
-                BackColor = Color.White
-            };
-            var lblTitle = new Label {
-                Text = "您即将执行一键切线操作，目标分支：",
-                AutoSize = true,
-                Location = new Point(25, 25),
-                Font = new Font("Segoe UI", 10),
-                ForeColor = Color.DimGray
-            };
-            var lblBranch = new Label {
-                Text = targetBranch,
-                AutoSize = true,
-                Location = new Point(25, 60),
-                Font = new Font("Segoe UI", 20, FontStyle.Bold),
-                ForeColor = Color.Crimson
-            };
-            var lblHint = new Label {
-                Text = "此操作将影响所有选中的仓库，请确认无误。",
-                AutoSize = true,
-                Location = new Point(25, 110),
-                Font = new Font("Segoe UI", 9, FontStyle.Italic),
-                ForeColor = Color.Gray
-            };
-            var btnOk = new Button {
-                Text = "🚀 确认切线",
-                DialogResult = DialogResult.OK,
-                Width = 160,
-                Height = 50,
-                Location = new Point(40, 160),
-                BackColor = Color.ForestGreen,
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
-            btnOk.FlatAppearance.BorderSize = 0;
-            var btnCancel = new Button {
-                Text = "❌ 取消",
-                DialogResult = DialogResult.Cancel,
-                Width = 160,
-                Height = 50,
-                Location = new Point(220, 160),
-                BackColor = Color.IndianRed,
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
-            btnCancel.FlatAppearance.BorderSize = 0;
-            form.Controls.AddRange(new Control[] {
-                lblTitle, lblBranch, lblHint, btnOk, btnCancel
-            });
-            form.AcceptButton = btnOk;
-            form.CancelButton = btnCancel;
-            return form.ShowDialog(this) == DialogResult.OK;
-        }
-
-        private void AdjustPbSizeMode(PictureBox pb) {
-            if (pb.Image == null)
-                return;
-            // 智能适配：图片比框大则缩放，比框小则居中
-            if (pb.Image.Width > pb.Width || pb.Image.Height > pb.Height) {
-                pb.SizeMode = PictureBoxSizeMode.Zoom;
-            } else {
-                pb.SizeMode = PictureBoxSizeMode.CenterImage;
-            }
-        }
-
-        // [新增] 1. 开始旅行（切换到 Gif 状态）
-        private void StartFrogTravel() {
-            ApplyImageTo(pbState, "state_switching"); // 播放 "旅行中" Gif
-            lblStateText.Text = "🐸 呱呱去旅行了...";
-            lblStateText.ForeColor = Color.ForestGreen;
-        }
-
-        // [新增] 2. 结束旅行并抽卡 (网络路径)
-        private async Task FinishFrogTravelAndDrawCard() {
-            // 使用网络共享路径
-            string baseLibPath = Path.Combine(_settings.UpdateSourcePath, "Img");
-
-            if (!Directory.Exists(baseLibPath)) {
-                try {
-                    Directory.CreateDirectory(baseLibPath);
-                    foreach (var r in Enum.GetNames(typeof(Rarity)))
-                        Directory.CreateDirectory(Path.Combine(baseLibPath, r));
-                } catch {
-                }
-            }
-
-            var rarity = RollRarity();
-            string rarityPath = Path.Combine(baseLibPath, rarity.ToString());
-            string imagePath = GetRandomImageFromFolder(rarityPath);
-
-            if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath)) {
-                try {
-                    using (var fs = new FileStream(imagePath, FileMode.Open, FileAccess.Read)) {
-                        pbState.Image = Image.FromStream(fs);
-                    }
-
-                    AdjustPbSizeMode(pbState);
-
-                    string fileName = Path.GetFileName(imagePath);
-                    string displayName = Path.GetFileNameWithoutExtension(fileName);
-
-                    lblStateText.ForeColor = _rarityColors.ContainsKey(rarity)? _rarityColors[rarity] : Color.Black;
-                    string rarityLabel = rarity == Rarity.UR? "🌟UR🌟" : rarity.ToString();
-                    string msg = $"带回了: {displayName} [{rarityLabel}]";
-
-                    // 核心修改逻辑：无论是否新卡，只要触发了抽卡，都可以尝试同步一次总数（或者仅在新卡时同步）
-                    // 为了保险，建议每次获得新卡时，强制同步一次“当前总数量”
-                    bool isNew = !_myCollection.Contains(fileName);
-                    if (isNew) {
-                        _myCollection.Add(fileName);
-                        CollectionService.Save(_settings.UpdateSourcePath, Environment.UserName, _myCollection);
-                        msg += " (NEW!)";
-                    }
-
-#if !BOSS_MODE && !PURE_MODE
-                    // [关键修改] 传入 _myCollection.Count (当前总数)，而不是 1
-                    if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                        await LeaderboardService.UploadMyScoreAsync(0, 0, _myCollection.Count);
-                    }
-#endif
-                    lblStateText.Text = msg;
-
-                    if (rarity == Rarity.SSR || rarity == Rarity.UR) {
-                        var originalColor = statePanel.BackColor;
-                        statePanel.BackColor = Color.Gold;
-                        flashTimer.Start();
-                        await Task.Delay(500);
-                        statePanel.BackColor = originalColor;
-                        await Task.Delay(200);
-                        statePanel.BackColor = Color.Gold;
-                        await Task.Delay(500);
-                        statePanel.BackColor = originalColor;
-                    }
-                } catch (Exception ex) {
-                    lblStateText.Text = "明信片污损了...";
-                    Log($"Load Image Error: {ex.Message}");
-                }
-            } else {
-                lblStateText.Text = $"🐸 去了{rarity}区但空手而归...";
-                lblStateText.ForeColor = Color.Gray;
-                ApplyImageTo(pbState, "state_done");
-            }
-        }
-
-        private Rarity RollRarity() {
-            int totalWeight = _rarityWeights.Values.Sum();
-            int roll = new Random().Next(0, totalWeight);
-            int current = 0;
-            foreach (var kvp in _rarityWeights) {
-                current += kvp.Value;
-                if (roll < current)
-                    return kvp.Key;
-            }
-
-            return Rarity.N;
-        }
-
-        private string GetRandomImageFromFolder(string folderPath) {
-            if (!Directory.Exists(folderPath))
-                return null;
-            var files = Directory.GetFiles(folderPath, "*.*").Where(f => f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".gif", StringComparison.OrdinalIgnoreCase)).ToList();
-            if (files.Count > 0)
-                return files[new Random().Next(files.Count)];
-            return null;
-        }
-
-        private async void ShowLeaderboard() {
-            if (_leaderboardForm != null && !_leaderboardForm.IsDisposed) {
-                if (_leaderboardForm.WindowState == FormWindowState.Minimized)
-                    _leaderboardForm.WindowState = FormWindowState.Normal;
-                _leaderboardForm.BringToFront();
-                _leaderboardForm.Activate();
-                return;
-            }
-
-            if (string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                string input = ShowInputBox("设置", "请输入共享文件路径:", _settings.LeaderboardPath);
-                if (string.IsNullOrWhiteSpace(input))
-                    return;
-                _settings.LeaderboardPath = input;
-                _settings.Save();
-                LeaderboardService.SetPath(input);
-            }
-
-            _leaderboardForm = new Form {
-                Text = "👑 卷王 & 摸鱼王 & 收藏家 排行榜",
-                Width = 1000,
-                Height = 500,
-                StartPosition = FormStartPosition.CenterScreen,
-                Icon = this.Icon
-            };
-            var table = new TableLayoutPanel {
-                Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1
-            };
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
-            var listCount = new ListView {
-                Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
-            };
-            listCount.Columns.Add("排名", 40);
-            listCount.Columns.Add("用户", 180);
-            listCount.Columns.Add("次数", 60);
-            var listDuration = new ListView {
-                Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
-            };
-            listDuration.Columns.Add("排名", 40);
-            listDuration.Columns.Add("用户", 180);
-            listDuration.Columns.Add("时长", 80);
-            var listCollection = new ListView {
-                Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
-            };
-            listCollection.Columns.Add("排名", 40);
-            listCollection.Columns.Add("收藏家", 180);
-            listCollection.Columns.Add("卡片数", 80);
-            table.Controls.Add(listCount, 0, 0);
-            table.Controls.Add(listDuration, 1, 0);
-            table.Controls.Add(listCollection, 2, 0);
-            var lblMy = new Label {
-                Dock = DockStyle.Bottom,
-                Height = 40,
-                TextAlign = ContentAlignment.MiddleCenter,
-                Font = new Font(DefaultFont, FontStyle.Bold),
-                Text = "正在加载数据..."
-            };
-            _leaderboardForm.Controls.Add(table);
-            _leaderboardForm.Controls.Add(lblMy);
-            _leaderboardForm.Shown += async (_, __) => {
-                var data = await LeaderboardService.GetLeaderboardAsync();
-                var sortedCount = data.OrderByDescending(x => x.TotalSwitches).ToList();
-                for (int i = 0; i < sortedCount.Count; i++) {
-                    var u = sortedCount[i];
-                    string name = u.Name;
-                    if (i == 0)
-                        name = $"🥇 {u.Name} (🌭切线王)";
-                    listCount.Items.Add(new ListViewItem(new[] {
-                        (i + 1).ToString(), name, u.TotalSwitches.ToString()
-                    }));
-                }
-
-                var sortedTime = data.OrderByDescending(x => x.TotalDuration).ToList();
-                for (int i = 0; i < sortedTime.Count; i++) {
-                    var u = sortedTime[i];
-                    string name = u.Name;
-                    if (i == 0)
-                        name = $"👑 {u.Name} (🐟摸鱼王)";
-                    listDuration.Items.Add(new ListViewItem(new[] {
-                        (i + 1).ToString(), name, FormatDuration(u.TotalDuration)
-                    }));
-                }
-
-                var sortedColl = data.OrderByDescending(x => x.TotalCardsCollected).ToList();
-                int rank = 1;
-                for (int i = 0; i < sortedColl.Count; i++) {
-                    var u = sortedColl[i];
-                    if (u.TotalCardsCollected <= 0)
-                        continue;
-                    string name = u.Name;
-                    if (rank == 1)
-                        name = $"🖼️ {u.Name} (馆长)";
-                    listCollection.Items.Add(new ListViewItem(new[] {
-                        rank.ToString(), name, u.TotalCardsCollected.ToString()
-                    }));
-                    rank++;
-                }
-
-                var me = data.FirstOrDefault(x => x.Name == Environment.UserName);
-                if (me != null) {
-                    lblMy.Text = $"我：切线{me.TotalSwitches}次 | 摸鱼{FormatDuration(me.TotalDuration)} | 藏品{me.TotalCardsCollected}张";
-                } else {
-                    lblMy.Text = "暂无数据";
-                }
-            };
-            _leaderboardForm.Show();
-        }
+        private void Log(string s) => txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}\r\n");
 
         private async void StartSuperSlimProcess() {
             if (MessageBox.Show("【一键瘦身】将执行深度 GC，非常耗时。\n建议下班挂机执行。是否继续？", "确认 (1/2)", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
@@ -1774,6 +1880,11 @@ namespace GitBranchSwitcher {
 
             this.Enabled = true;
             statusLabel.Text = "清理完成";
+#if !BOSS_MODE && !PURE_MODE
+            if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                await LeaderboardService.UploadMyScoreAsync(0, totalSavedBytes, null, null);
+            }
+#endif
             MessageBox.Show($"🎉 清理完毕！\n节省空间: {FormatSize(totalSavedBytes)}", "完成");
         }
 
@@ -1810,7 +1921,5 @@ namespace GitBranchSwitcher {
 
             return new List<string>();
         }
-
-        private void Log(string s) => txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}\r\n");
     }
 }

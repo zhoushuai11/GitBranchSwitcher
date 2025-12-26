@@ -13,8 +13,11 @@ namespace GitBranchSwitcher {
         public double TotalDuration { get; set; } = 0;
         public long TotalSpaceCleaned { get; set; } = 0;
 
-        // 累计收集卡片数
         public int TotalCardsCollected { get; set; } = 0;
+
+        // [新增] 收藏总分 (欧气值)
+        public int TotalCollectionScore { get; set; } = 0;
+
         public DateTime LastActive { get; set; }
     }
 
@@ -27,9 +30,9 @@ namespace GitBranchSwitcher {
 
         private static readonly Random _jitter = new Random();
 
-        // [修改] 参数3改为 nullable int，代表“当前藏品总数”
-        // 如果传入 null，则不修改藏品数；如果传入数字，则直接覆盖更新
-        public static async Task<(int totalCount, double totalTime, long totalSpace)> UploadMyScoreAsync(double durationAdd, long spaceAdd, int? currentTotalCards = null) {
+        // [修改] 增加 currentTotalScore 参数
+        public static async Task<(int totalCount, double totalTime, long totalSpace)> UploadMyScoreAsync(double durationAdd, long spaceAdd, int? currentTotalCards = null, int? currentTotalScore = null) // 新增：当前总分
+        {
             if (string.IsNullOrEmpty(_sharedFilePath))
                 return (0, 0, 0);
 
@@ -70,10 +73,11 @@ namespace GitBranchSwitcher {
 
                             me.TotalSpaceCleaned += spaceAdd;
 
-                            // [关键修改] 如果传入了具体的藏品数量，直接赋值（全量同步），防止计数偏差
-                            if (currentTotalCards.HasValue) {
+                            // 全量同步卡片数和分数
+                            if (currentTotalCards.HasValue)
                                 me.TotalCardsCollected = currentTotalCards.Value;
-                            }
+                            if (currentTotalScore.HasValue)
+                                me.TotalCollectionScore = currentTotalScore.Value;
 
                             me.LastActive = DateTime.Now;
 
