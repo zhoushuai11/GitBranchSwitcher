@@ -11,72 +11,46 @@ using System.Text;
 
 namespace GitBranchSwitcher {
     public partial class MainForm : Form {
-        // ==========================================
-        // 布局容器与分组
-        // ==========================================
-        private GroupBox grpTop; // ① 工程区
-        private GroupBox grpList; // ② 仓库列表
-        private GroupBox grpActions; // ③ 快捷操作
-
-        private SplitContainer splitGlobal;
-        private SplitContainer splitUpper;
-        private SplitContainer splitMiddle;
+        // ... (变量定义与之前类似) ...
+        private GroupBox grpTop, grpList, grpActions;
+        private SplitContainer splitGlobal, splitUpper, splitMiddle;
         private Form consoleWindow;
         private Form? _leaderboardForm = null;
 
-        // ==========================================
-        // 控件定义
-        // ==========================================
-        // 1. 顶部
         private CheckedListBox lbParents;
         private Button btnAddParent, btnRemoveParent;
-
-        // 2. 列表区
         private ListView lvRepos;
         private FlowLayoutPanel repoToolbar;
-
-        // 3. 操作区
         private Label lblTargetBranch, lblFetchStatus;
         private ComboBox cmbTargetBranch;
+
         private Button btnSwitchAll, btnUseCurrentBranch, btnToggleConsole;
-        private CheckBox chkStashOnSwitch, chkFastMode;
-        private CheckBox chkConfirmOnSwitch; // [新增] 二次确认开关
 
-        // 状态与动画区
+        // [新增] 藏品按钮
+        private Button btnMyCollection;
+        private CheckBox chkStashOnSwitch, chkFastMode, chkConfirmOnSwitch;
+
         private FlowLayoutPanel statePanel;
-
         private PictureBox pbState;
-
-        // 移除了独立的 pbFlash 控件，改为背景闪烁特效，避免布局层级问题
         private Label lblStateText;
         private System.Windows.Forms.Timer flashTimer;
 
-        // 默认图片大小初始值 (会随窗口调整)
-        private const int DEFAULT_IMG_SIZE = 220;
+        // [修改] 图片改小一点，不占太大空间
+        private const int DEFAULT_IMG_SIZE = 180;
 
-        // 4. 控制台区
-        private GroupBox grpDetails;
+        private GroupBox grpDetails, grpLog;
         private SplitContainer splitConsole;
         private ListView lvFileChanges;
         private RichTextBox rtbDiff;
         private Panel pnlDetailRight, pnlActions;
         private Label lblRepoInfo;
-        private TextBox txtCommitMsg;
+        private TextBox txtCommitMsg, txtLog;
         private Button btnCommit, btnPull, btnPush, btnStash;
         private ListViewGroup grpStaged, grpUnstaged;
-
-        // 5. 日志区
-        private GroupBox grpLog;
-        private TextBox txtLog;
-
-        // 底部状态栏
         private StatusStrip statusStrip;
         private ToolStripStatusLabel statusLabel, statusStats;
         private ToolStripProgressBar statusProgress;
 
-        // ==========================================
-        // 数据与逻辑对象
-        // ==========================================
         private readonly BindingList<GitRepo> _repos = new BindingList<GitRepo>();
         private List<string> _allBranches = new List<string>();
         private AppSettings _settings;
@@ -84,8 +58,6 @@ namespace GitBranchSwitcher {
         private int _loadSeq = 0;
         private HashSet<string> _checkedParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private GitWorkflowService _workflowService;
-
-        // [新增] 本地内存中的藏品列表 (启动时读取)
         private List<string> _myCollection = new List<string>();
 
         private enum SwitchState {
@@ -94,7 +66,6 @@ namespace GitBranchSwitcher {
             Done
         }
 
-        // === 🐸 青蛙旅行 & 抽卡系统 ===
         private enum Rarity {
             N,
             R,
@@ -103,26 +74,20 @@ namespace GitBranchSwitcher {
             UR
         }
 
-        // 抽卡概率权重
         private readonly Dictionary<Rarity, int> _rarityWeights = new Dictionary<Rarity, int> {
             {
                 Rarity.N, 50
-            }, // 50%
-            {
+            }, {
                 Rarity.R, 30
-            }, // 30%
-            {
+            }, {
                 Rarity.SR, 15
-            }, // 15%
-            {
+            }, {
                 Rarity.SSR, 4
-            }, // 4%
-            {
+            }, {
                 Rarity.UR, 1
-            } // 1%
+            }
         };
 
-        // 稀有度颜色映射
         private readonly Dictionary<Rarity, Color> _rarityColors = new Dictionary<Rarity, Color> {
             {
                 Rarity.N, Color.Gray
@@ -139,9 +104,8 @@ namespace GitBranchSwitcher {
 
         public MainForm() {
             _settings = AppSettings.Load();
-
-            // [新增] 启动时加载当前用户的藏品
-            _myCollection = CollectionService.Load(Environment.UserName);
+            // [修改] 传入共享根目录加载藏品
+            _myCollection = CollectionService.Load(_settings.UpdateSourcePath, Environment.UserName);
 
             InitializeComponent();
             TrySetRuntimeIcon();
@@ -160,13 +124,13 @@ namespace GitBranchSwitcher {
             }
 
             _ = LoadReposForCheckedParentsAsync(false);
-
             _workflowService = new GitWorkflowService(_settings.MaxParallel);
         }
 
         protected override void OnShown(EventArgs e) {
             base.OnShown(e);
             ConfigureInitialLayout();
+            AdjustPbSizeMode(pbState);
 #if !PURE_MODE
             _ = UpdateService.CheckAndUpdateAsync(_settings.UpdateSourcePath, this);
 #endif
@@ -192,8 +156,8 @@ namespace GitBranchSwitcher {
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             string vStr = $"{version.Major}.{version.Minor}.{version.Build}";
             Text = $"Git 分支管理工具 - v{vStr}";
-            Width = 1450;
-            Height = 950;
+            Width = 1783;
+            Height = 1137;
             StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.BackColor = Color.WhiteSmoke;
@@ -217,7 +181,7 @@ namespace GitBranchSwitcher {
         }
 
         private void InitUi() {
-            // === 全局布局容器 ===
+            // ... (Top和List布局保持不变，省略以节省空间，直接看 grpActions) ...
             splitGlobal = new SplitContainer {
                 Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterWidth = 6
             };
@@ -228,19 +192,14 @@ namespace GitBranchSwitcher {
                 Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 6
             };
 
-            // ==========================================
-            // 1. 工程区 (grpTop)
-            // ==========================================
             grpTop = new GroupBox {
                 Text = "① 工程区 (Project Workspace)", Dock = DockStyle.Fill, Padding = new Padding(10)
             };
-
             var pnlTopContent = new TableLayoutPanel {
                 Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1
             };
             pnlTopContent.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             pnlTopContent.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-
             lbParents = new CheckedListBox {
                 Dock = DockStyle.Fill,
                 CheckOnClick = true,
@@ -248,32 +207,25 @@ namespace GitBranchSwitcher {
                 BorderStyle = BorderStyle.None,
                 BackColor = Color.WhiteSmoke
             };
-
             var pnlTopBtns = new FlowLayoutPanel {
                 AutoSize = true, FlowDirection = FlowDirection.TopDown, Dock = DockStyle.Right, Margin = new Padding(0)
             };
-
             btnAddParent = MakeBtn("📂 添加父目录...", Color.AliceBlue);
             btnAddParent.Width = 140;
             btnRemoveParent = MakeBtn("🗑️ 移除选中");
             btnRemoveParent.Width = 140;
-
             var btnToggleParents = MakeBtn("✅ 全选/反选");
             btnToggleParents.Width = 140;
             var pnlSelectBtns = new FlowLayoutPanel {
                 AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0)
             };
             pnlSelectBtns.Controls.Add(btnToggleParents);
-
             pnlTopBtns.Controls.Add(btnAddParent);
             pnlTopBtns.Controls.Add(btnRemoveParent);
             pnlTopBtns.Controls.Add(pnlSelectBtns);
-
             pnlTopContent.Controls.Add(lbParents, 0, 0);
             pnlTopContent.Controls.Add(pnlTopBtns, 1, 0);
             grpTop.Controls.Add(pnlTopContent);
-
-            // 绑定 Top 事件
             var cm = new ContextMenuStrip();
             cm.Items.Add("添加父目录…", null, (_, __) => btnAddParent.PerformClick());
             cm.Items.Add("移除选中", null, (_, __) => btnRemoveParent.PerformClick());
@@ -331,19 +283,14 @@ namespace GitBranchSwitcher {
                     await LoadReposForCheckedParentsAsync(false);
                 }));
             };
-
             splitUpper.Panel1.Controls.Add(grpTop);
 
-            // ==========================================
-            // 2. 仓库列表 (grpList)
-            // ==========================================
             grpList = new GroupBox {
                 Text = "② 仓库列表 (Repositories)", Dock = DockStyle.Fill, Padding = new Padding(5)
             };
             repoToolbar = new FlowLayoutPanel {
                 Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(0, 0, 0, 5)
             };
-
             var btnToggleSelect = MakeBtn("✅ 全选/反选");
             var btnRescan = MakeBtn("🔄 刷新");
             var btnNewClone = MakeBtn("➕ 新建拉线", Color.Azure);
@@ -354,7 +301,6 @@ namespace GitBranchSwitcher {
 #endif
             var btnSuperSlim = MakeBtn("🔥 一键瘦身", Color.MistyRose);
             btnSuperSlim.ForeColor = Color.DarkRed;
-
             repoToolbar.Controls.Add(btnToggleSelect);
             repoToolbar.Controls.Add(btnRescan);
             repoToolbar.Controls.Add(new Label {
@@ -368,7 +314,6 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnRank);
 #endif
             repoToolbar.Controls.Add(btnSuperSlim);
-
             lvRepos = new ListView {
                 Dock = DockStyle.Fill,
                 View = View.Details,
@@ -390,30 +335,21 @@ namespace GitBranchSwitcher {
 
             grpList.Controls.Add(lvRepos);
             grpList.Controls.Add(repoToolbar);
-
             splitMiddle.Panel1.Controls.Add(grpList);
-
-            // 事件
             lvRepos.SelectedIndexChanged += async (_, __) => await RefreshRepoDetails();
-
-            // [修改] 全选/反选 + 自动计算众数分支
             btnToggleSelect.Click += (_, __) => {
                 bool hasUn = lvRepos.Items.Cast<ListViewItem>().Any(i => !i.Checked);
                 lvRepos.BeginUpdate();
                 foreach (ListViewItem i in lvRepos.Items)
                     i.Checked = hasUn;
                 lvRepos.EndUpdate();
-
-                // [新增] 如果是全选，统计众数分支并自动填入
                 if (hasUn) {
                     var topBranch = lvRepos.Items.Cast<ListViewItem>().Select(i => ((GitRepo)i.Tag).CurrentBranch).Where(b => !string.IsNullOrEmpty(b) && b != "—").GroupBy(b => b).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
-
                     if (!string.IsNullOrEmpty(topBranch)) {
                         cmbTargetBranch.Text = topBranch;
                     }
                 }
             };
-
             btnRescan.Click += async (_, __) => await LoadReposForCheckedParentsAsync(true);
             btnNewClone.Click += (_, __) => {
                 var form = new CloneForm();
@@ -458,8 +394,6 @@ namespace GitBranchSwitcher {
             grpActions = new GroupBox {
                 Text = "③ 快捷操作 (Actions)", Dock = DockStyle.Fill, Padding = new Padding(10)
             };
-
-            // [修改] 使用 Panel 代替 TableLayoutPanel 以便更好地控制自适应
             var pnlActionContent = new Panel {
                 Dock = DockStyle.Fill, AutoScroll = true
             };
@@ -475,12 +409,11 @@ namespace GitBranchSwitcher {
                 Text = "🎯 目标分支：",
                 AutoSize = true,
                 Font = new Font("Segoe UI", 9, FontStyle.Bold),
-                Margin = new Padding(0, 5, 0, 5),
+                Margin = new Padding(0, 2, 0, 2),
                 Dock = DockStyle.Top
             };
-
             var pnlComboRow = new Panel {
-                Height = 30, Dock = DockStyle.Top, Padding = new Padding(0, 0, 0, 5)
+                Height = 28, Dock = DockStyle.Top, Padding = new Padding(0, 0, 0, 2)
             };
             cmbTargetBranch = new ComboBox {
                 Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDown
@@ -491,14 +424,12 @@ namespace GitBranchSwitcher {
             pnlComboRow.Controls.Add(cmbTargetBranch);
             pnlComboRow.Controls.Add(btnUseCurrentBranch);
 
-            // 垫片
             var pnlSpacer1 = new Panel {
-                Height = 10, Dock = DockStyle.Top
+                Height = 5, Dock = DockStyle.Top
             };
-
             btnSwitchAll = new Button {
                 Text = "🚀 一键切线 (Switch)",
-                Height = 45,
+                Height = 40,
                 Dock = DockStyle.Top,
                 BackColor = Color.DodgerBlue,
                 ForeColor = Color.White,
@@ -507,14 +438,13 @@ namespace GitBranchSwitcher {
                 Font = new Font("Segoe UI", 12, FontStyle.Bold)
             };
             btnSwitchAll.FlatAppearance.BorderSize = 0;
-
             chkStashOnSwitch = new CheckBox {
                 Text = "🔒 尝试 Stash 本地修改",
                 AutoSize = true,
                 Checked = _settings.StashOnSwitch,
                 ForeColor = Color.DarkSlateBlue,
                 Dock = DockStyle.Top,
-                Padding = new Padding(0, 10, 0, 0)
+                Padding = new Padding(0, 5, 0, 0)
             };
             chkFastMode = new CheckBox {
                 Text = "⚡ 极速本地切换 (跳过 Fetch)",
@@ -523,17 +453,15 @@ namespace GitBranchSwitcher {
                 ForeColor = Color.DarkGreen,
                 Font = new Font(DefaultFont, FontStyle.Bold),
                 Dock = DockStyle.Top,
-                Padding = new Padding(0, 5, 0, 0)
+                Padding = new Padding(0, 2, 0, 0)
             };
-
-            // [新增] 二次确认
             chkConfirmOnSwitch = new CheckBox {
                 Text = "🛡️ 开启切线二次确认弹窗",
                 AutoSize = true,
                 Checked = _settings.ConfirmOnSwitch,
                 ForeColor = Color.DarkRed,
                 Dock = DockStyle.Top,
-                Padding = new Padding(0, 5, 0, 0)
+                Padding = new Padding(0, 2, 0, 0)
             };
             chkConfirmOnSwitch.CheckedChanged += (_, __) => {
                 _settings.ConfirmOnSwitch = chkConfirmOnSwitch.Checked;
@@ -541,60 +469,66 @@ namespace GitBranchSwitcher {
             };
 
             btnToggleConsole = MakeBtn("💻 打开 Git 控制台", Color.OldLace);
-            btnToggleConsole.Height = 35;
+            btnToggleConsole.Height = 32;
             btnToggleConsole.Dock = DockStyle.Top;
-            var pnlConsoleBtnWrap = new Panel {
-                Height = 45, Dock = DockStyle.Top, Padding = new Padding(0, 10, 0, 0)
-            };
-            pnlConsoleBtnWrap.Controls.Add(btnToggleConsole);
 
-            // [修改] 状态展示区 (青蛙/抽卡)
+            // [新增] 藏品按钮，放在控制台按钮下面
+            btnMyCollection = MakeBtn("🖼️ 我的藏品 (Album)", Color.LavenderBlush);
+            btnMyCollection.Height = 32;
+            btnMyCollection.Dock = DockStyle.Top;
+            btnMyCollection.Click += (_, __) => new CollectionForm().Show();
+
+            // 包装一下按钮，增加间距
+            var pnlBtnsWrap = new Panel {
+                Height = 70, Dock = DockStyle.Top, Padding = new Padding(0, 6, 0, 0)
+            };
+            pnlBtnsWrap.Controls.Add(btnMyCollection);
+            pnlBtnsWrap.Controls.Add(btnToggleConsole); // Dock Top，所以 Console 在 MyCollection 上面
+
+            // 状态展示区
             statePanel = new FlowLayoutPanel {
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.TopDown,
                 WrapContents = false,
                 AutoScroll = true,
-                Padding = new Padding(0, 20, 0, 0)
+                Padding = new Padding(0, 5, 0, 0)
             };
-
-            // 图片框：自适应宽度
             pbState = new PictureBox {
-                Width = DEFAULT_IMG_SIZE, Height = DEFAULT_IMG_SIZE, SizeMode = PictureBoxSizeMode.Zoom, Cursor = Cursors.Hand,
+                Width = DEFAULT_IMG_SIZE, Height = DEFAULT_IMG_SIZE, SizeMode = PictureBoxSizeMode.Zoom, Cursor = Cursors.Hand
             };
 
-            // [新增] 监听 Resize 事件，实现自适应布局
             grpActions.Resize += (s, e) => {
                 try {
-                    // 动态调整图片大小，保持正方形
-                    int newWidth = grpActions.ClientSize.Width - 30; // 减去 Padding
+                    int newWidth = grpActions.ClientSize.Width - 25;
                     if (newWidth < 100)
                         newWidth = 100;
-                    if (newWidth > 400)
-                        newWidth = 400; // 上限
+                    if (newWidth > 350)
+                        newWidth = 350; // 限制最大宽度，防止太大
                     pbState.Size = new Size(newWidth, newWidth);
+                    AdjustPbSizeMode(pbState);
                 } catch {
                 }
             };
 
-            // [新增] 图库右键菜单
             var menuFrog = new ContextMenuStrip();
             menuFrog.Items.Add("🖼️ 查看我的藏品 (Album)", null, (_, __) => new CollectionForm().Show());
             menuFrog.Items.Add(new ToolStripSeparator());
             menuFrog.Items.Add("📂 打开图库目录 (Img)", null, (_, __) => {
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _settings.PostcardLibraryRoot);
-                if (!Directory.Exists(path)) {
-                    Directory.CreateDirectory(path);
-                    foreach (var r in Enum.GetNames(typeof(Rarity)))
-                        Directory.CreateDirectory(Path.Combine(path, r));
+                // 使用网络共享路径
+                string path = Path.Combine(_settings.UpdateSourcePath, "Img");
+                try {
+                    Process.Start("explorer.exe", path);
+                } catch {
+                    MessageBox.Show("无法访问共享目录: " + path);
                 }
-
-                Process.Start("explorer.exe", path);
             });
             menuFrog.Items.Add("📂 打开存档目录 (Collect)", null, (_, __) => {
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Collect");
-                if (!Directory.Exists(path))
-                    Directory.CreateDirectory(path);
-                Process.Start("explorer.exe", path);
+                string path = Path.Combine(_settings.UpdateSourcePath, "Collect");
+                try {
+                    Process.Start("explorer.exe", path);
+                } catch {
+                    MessageBox.Show("无法访问共享目录: " + path);
+                }
             });
             pbState.ContextMenuStrip = menuFrog;
 
@@ -603,15 +537,13 @@ namespace GitBranchSwitcher {
                 Font = new Font("Segoe UI", 12, FontStyle.Bold),
                 AutoSize = true,
                 ForeColor = Color.Gray,
-                Margin = new Padding(0, 10, 0, 0)
+                Margin = new Padding(0, 5, 0, 0)
             };
-
             statePanel.Controls.Add(pbState);
             statePanel.Controls.Add(lblStateText);
 
-            // 重新组织顺序 (Dock Top 是倒序添加)
-            pnlActionContent.Controls.Add(statePanel); // Fill
-            pnlActionContent.Controls.Add(pnlConsoleBtnWrap);
+            pnlActionContent.Controls.Add(statePanel);
+            pnlActionContent.Controls.Add(pnlBtnsWrap); // 按钮组
             pnlActionContent.Controls.Add(chkConfirmOnSwitch);
             pnlActionContent.Controls.Add(chkFastMode);
             pnlActionContent.Controls.Add(chkStashOnSwitch);
@@ -620,13 +552,10 @@ namespace GitBranchSwitcher {
             pnlActionContent.Controls.Add(pnlComboRow);
             pnlActionContent.Controls.Add(lblTargetBranch);
             pnlActionContent.Controls.Add(lblFetchStatus);
-
             grpActions.Controls.Add(pnlActionContent);
-
             splitMiddle.Panel2.Controls.Add(grpActions);
             splitUpper.Panel2.Controls.Add(splitMiddle);
 
-            // 事件绑定
             btnUseCurrentBranch.Click += (_, __) => {
                 var item = lvRepos.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Checked);
                 if (item == null) {
@@ -660,8 +589,7 @@ namespace GitBranchSwitcher {
             };
             flashTimer.Tick += (_, __) => {
                 flashTimer.Stop();
-            }; // 简单计时器
-
+            };
             btnToggleConsole.Click += (_, __) => {
                 if (consoleWindow.Visible) {
                     consoleWindow.Hide();
@@ -675,16 +603,12 @@ namespace GitBranchSwitcher {
                 }
             };
 
-            // ==========================================
-            // 4. Git 控制台 (grpDetails)
-            // ==========================================
             grpDetails = new GroupBox {
                 Text = "④ Git 控制台 (Console)", Dock = DockStyle.Fill, Padding = new Padding(5), BackColor = Color.White
             };
             splitConsole = new SplitContainer {
                 Dock = DockStyle.Fill, Orientation = Orientation.Vertical, SplitterWidth = 5
             };
-
             lvFileChanges = new ListView {
                 Dock = DockStyle.Fill,
                 View = View.Details,
@@ -701,7 +625,6 @@ namespace GitBranchSwitcher {
             lvFileChanges.Groups.Add(grpUnstaged);
             lvFileChanges.Columns.Add("状态", 40);
             lvFileChanges.Columns.Add("文件路径", 500);
-
             pnlDetailRight = new Panel {
                 Dock = DockStyle.Fill
             };
@@ -714,7 +637,6 @@ namespace GitBranchSwitcher {
                 ForeColor = Color.DarkSlateGray,
                 BackColor = Color.WhiteSmoke
             };
-
             pnlActions = new Panel {
                 Dock = DockStyle.Bottom, Height = 95, Padding = new Padding(5)
             };
@@ -752,7 +674,6 @@ namespace GitBranchSwitcher {
             pnlBtns.Controls.Add(btnStash);
             pnlActions.Controls.Add(txtCommitMsg);
             pnlActions.Controls.Add(pnlBtns);
-
             rtbDiff = new RichTextBox {
                 Dock = DockStyle.Fill,
                 Font = new Font("Consolas", 9),
@@ -762,15 +683,12 @@ namespace GitBranchSwitcher {
                 BorderStyle = BorderStyle.None,
                 WordWrap = false
             };
-
             pnlDetailRight.Controls.Add(rtbDiff);
             pnlDetailRight.Controls.Add(lblRepoInfo);
             pnlDetailRight.Controls.Add(pnlActions);
             splitConsole.Panel1.Controls.Add(lvFileChanges);
             splitConsole.Panel2.Controls.Add(pnlDetailRight);
             grpDetails.Controls.Add(splitConsole);
-
-            // Bind Console Events
             lvFileChanges.SelectedIndexChanged += async (_, __) => await ShowSelectedFileDiff();
             lvFileChanges.DoubleClick += async (_, __) => await ToggleStagedStatus();
             btnCommit.Click += async (_, __) => await RunDetailAction("Commit");
@@ -803,7 +721,6 @@ namespace GitBranchSwitcher {
                 }
             });
             lvFileChanges.ContextMenuStrip = fileMenu;
-
             consoleWindow = new Form {
                 Text = "Git 控制台 (独立视图)",
                 Width = 1000,
@@ -821,9 +738,6 @@ namespace GitBranchSwitcher {
                 }
             };
 
-            // ==========================================
-            // 5. 运行日志 (grpLog)
-            // ==========================================
             grpLog = new GroupBox {
                 Text = "⑤ 运行日志 (Logs)", Dock = DockStyle.Fill
             };
@@ -865,7 +779,6 @@ namespace GitBranchSwitcher {
             statusStrip.Items.Add(statusProgress);
             Controls.Add(statusStrip);
             Controls.Add(splitGlobal);
-
             lvRepos.DoubleClick += (_, __) => {
                 if (lvRepos.SelectedItems.Count == 0)
                     return;
@@ -883,7 +796,7 @@ namespace GitBranchSwitcher {
             };
         }
 
-        // === 逻辑方法 ===
+        // ... (RenderRepoItem, BatchSyncStatusUpdate 等不变，省略) ...
         private void SeedParentsToUi() {
             if (lbParents == null)
                 return;
@@ -908,11 +821,9 @@ namespace GitBranchSwitcher {
                 item.SubItems[1].ForeColor = Color.ForestGreen;
             else
                 item.SubItems[1].ForeColor = Color.Black;
-
             string syncText = "";
             Color syncColor = Color.Gray;
             Font syncFont = item.Font;
-
             if (repo.IsSyncChecked) {
                 if (!repo.HasUpstream) {
                     syncText = "⚠️ 无远程";
@@ -1378,6 +1289,7 @@ namespace GitBranchSwitcher {
             }
         }
 
+        // === 核心逻辑修改：SwitchAllAsync ===
         private async Task SwitchAllAsync() {
             var target = cmbTargetBranch.Text.Trim();
             if (string.IsNullOrEmpty(target)) {
@@ -1385,7 +1297,6 @@ namespace GitBranchSwitcher {
                 return;
             }
 
-            // [新增] 二次确认逻辑
             if (_settings.ConfirmOnSwitch) {
                 if (!ShowSwitchConfirmDialog(target))
                     return;
@@ -1398,11 +1309,9 @@ namespace GitBranchSwitcher {
 
             btnSwitchAll.Enabled = false;
             statusProgress.Visible = true;
-            SetSwitchState(SwitchState.Switching);
-            foreach (var i in items) {
-                i.Text = "⏳";
-                i.SubItems[1].Text = "...";
-            }
+
+            // [新增] 1. 开始切线：播放“旅行中”动画
+            StartFrogTravel();
 
             var progressHandler = new Progress<RepoSwitchResult>(result => {
                 var item = items.FirstOrDefault(x => x.Tag == result.Repo);
@@ -1417,23 +1326,18 @@ namespace GitBranchSwitcher {
 
             double totalSeconds = await _workflowService.SwitchReposAsync(targetRepos, target, _settings.StashOnSwitch, _settings.FastMode, progressHandler);
 
-            // 完成后的处理
 #if !BOSS_MODE && !PURE_MODE
             if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                // 这里只上传时间积分，卡片积分在动画里上传
                 var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0);
                 UpdateStatsUi(nc, nt, ns);
             }
 #endif
+            // [新增] 2. 切线完成：结算抽卡
+            await FinishFrogTravelAndDrawCard();
 
-            SetSwitchState(SwitchState.Done);
             statusProgress.Visible = false;
             btnSwitchAll.Enabled = true;
             statusLabel.Text = "完成";
-
-            // [新增] 触发青蛙旅行动画
-            await PlayFrogTravelAnimation();
-
             Log("🏁 全部完成");
         }
 
@@ -1458,8 +1362,8 @@ namespace GitBranchSwitcher {
 
             var img = ImageHelper.LoadRandomImageFromResource(key);
             if (img != null) {
-                pb.SizeMode = PictureBoxSizeMode.Zoom;
                 pb.Image = img;
+                AdjustPbSizeMode(pb);
             }
 #endif
         }
@@ -1553,9 +1457,6 @@ namespace GitBranchSwitcher {
             return sb.ToString().Trim();
         }
 
-        // === 辅助方法 ===
-
-        // 1. 二次确认弹窗
         private bool ShowSwitchConfirmDialog(string targetBranch) {
             using var form = new Form {
                 Text = "⚠️ 高危操作确认",
@@ -1567,7 +1468,6 @@ namespace GitBranchSwitcher {
                 MinimizeBox = false,
                 BackColor = Color.White
             };
-
             var lblTitle = new Label {
                 Text = "您即将执行一键切线操作，目标分支：",
                 AutoSize = true,
@@ -1589,7 +1489,6 @@ namespace GitBranchSwitcher {
                 Font = new Font("Segoe UI", 9, FontStyle.Italic),
                 ForeColor = Color.Gray
             };
-
             var btnOk = new Button {
                 Text = "🚀 确认切线",
                 DialogResult = DialogResult.OK,
@@ -1616,7 +1515,6 @@ namespace GitBranchSwitcher {
                 Cursor = Cursors.Hand
             };
             btnCancel.FlatAppearance.BorderSize = 0;
-
             form.Controls.AddRange(new Control[] {
                 lblTitle, lblBranch, lblHint, btnOk, btnCancel
             });
@@ -1625,9 +1523,30 @@ namespace GitBranchSwitcher {
             return form.ShowDialog(this) == DialogResult.OK;
         }
 
-        // 2. 青蛙旅行逻辑 (V2: 抽卡 + 本地保存 + 闪光)
-        private async Task PlayFrogTravelAnimation() {
-            string baseLibPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _settings.PostcardLibraryRoot);
+        private void AdjustPbSizeMode(PictureBox pb) {
+            if (pb.Image == null)
+                return;
+            // 智能适配：图片比框大则缩放，比框小则居中
+            if (pb.Image.Width > pb.Width || pb.Image.Height > pb.Height) {
+                pb.SizeMode = PictureBoxSizeMode.Zoom;
+            } else {
+                pb.SizeMode = PictureBoxSizeMode.CenterImage;
+            }
+        }
+
+        // [新增] 1. 开始旅行（切换到 Gif 状态）
+        private void StartFrogTravel() {
+            ApplyImageTo(pbState, "state_switching"); // 播放 "旅行中" Gif
+            lblStateText.Text = "🐸 呱呱去旅行了...";
+            lblStateText.ForeColor = Color.ForestGreen;
+        }
+
+        // [新增] 2. 结束旅行并抽卡 (网络路径)
+        private async Task FinishFrogTravelAndDrawCard() {
+            // 使用网络共享路径
+            string baseLibPath = Path.Combine(_settings.UpdateSourcePath, "Img");
+
+            // 如果目录不存在，尝试创建（通常网络路径没权限创建根目录，但子目录可能可以）
             if (!Directory.Exists(baseLibPath)) {
                 try {
                     Directory.CreateDirectory(baseLibPath);
@@ -1637,21 +1556,18 @@ namespace GitBranchSwitcher {
                 }
             }
 
-            lblStateText.Text = "🐸 呱呱去旅行了...";
-            lblStateText.ForeColor = Color.ForestGreen;
-            await Task.Delay(1500);
-
             var rarity = RollRarity();
             string rarityPath = Path.Combine(baseLibPath, rarity.ToString());
             string imagePath = GetRandomImageFromFolder(rarityPath);
 
             if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath)) {
                 try {
+                    // 读取远程图片
                     using (var fs = new FileStream(imagePath, FileMode.Open, FileAccess.Read)) {
                         pbState.Image = Image.FromStream(fs);
                     }
 
-                    pbState.SizeMode = PictureBoxSizeMode.Zoom;
+                    AdjustPbSizeMode(pbState);
 
                     string fileName = Path.GetFileName(imagePath);
                     string displayName = Path.GetFileNameWithoutExtension(fileName);
@@ -1660,14 +1576,13 @@ namespace GitBranchSwitcher {
                     string rarityLabel = rarity == Rarity.UR? "🌟UR🌟" : rarity.ToString();
                     string msg = $"带回了: {displayName} [{rarityLabel}]";
 
-                    // [修改] 检查本地内存收藏
+                    // 检查去重
                     if (!_myCollection.Contains(fileName)) {
                         _myCollection.Add(fileName);
-                        // 保存到本地
-                        CollectionService.Save(Environment.UserName, _myCollection);
+                        // 保存到共享目录
+                        CollectionService.Save(_settings.UpdateSourcePath, Environment.UserName, _myCollection);
 
                         msg += " (NEW!)";
-
 #if !BOSS_MODE && !PURE_MODE
                         if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
                             await LeaderboardService.UploadMyScoreAsync(0, 0, 1);
@@ -1677,10 +1592,10 @@ namespace GitBranchSwitcher {
 
                     lblStateText.Text = msg;
 
-                    // 闪光特效 (背景闪烁)
+                    // 闪光特效
                     if (rarity == Rarity.SSR || rarity == Rarity.UR) {
                         var originalColor = statePanel.BackColor;
-                        statePanel.BackColor = Color.Gold; // 闪瞎狗眼金
+                        statePanel.BackColor = Color.Gold;
                         flashTimer.Start();
                         await Task.Delay(500);
                         statePanel.BackColor = originalColor;
@@ -1696,6 +1611,8 @@ namespace GitBranchSwitcher {
             } else {
                 lblStateText.Text = $"🐸 去了{rarity}区但空手而归...";
                 lblStateText.ForeColor = Color.Gray;
+                // 如果没抽到图，显示“完成”状态图
+                ApplyImageTo(pbState, "state_done");
             }
         }
 
@@ -1752,33 +1669,27 @@ namespace GitBranchSwitcher {
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
             table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
-
             var listCount = new ListView {
                 Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
             };
             listCount.Columns.Add("排名", 40);
             listCount.Columns.Add("用户", 180);
             listCount.Columns.Add("次数", 60);
-
             var listDuration = new ListView {
                 Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
             };
             listDuration.Columns.Add("排名", 40);
             listDuration.Columns.Add("用户", 180);
             listDuration.Columns.Add("时长", 80);
-
-            // [修改] 收藏榜 (替代原来的瘦身榜)
             var listCollection = new ListView {
                 Dock = DockStyle.Fill, View = View.Details, GridLines = true, FullRowSelect = true
             };
             listCollection.Columns.Add("排名", 40);
             listCollection.Columns.Add("收藏家", 180);
             listCollection.Columns.Add("卡片数", 80);
-
             table.Controls.Add(listCount, 0, 0);
             table.Controls.Add(listDuration, 1, 0);
             table.Controls.Add(listCollection, 2, 0);
-
             var lblMy = new Label {
                 Dock = DockStyle.Bottom,
                 Height = 40,
@@ -1788,10 +1699,8 @@ namespace GitBranchSwitcher {
             };
             _leaderboardForm.Controls.Add(table);
             _leaderboardForm.Controls.Add(lblMy);
-
             _leaderboardForm.Shown += async (_, __) => {
                 var data = await LeaderboardService.GetLeaderboardAsync();
-
                 var sortedCount = data.OrderByDescending(x => x.TotalSwitches).ToList();
                 for (int i = 0; i < sortedCount.Count; i++) {
                     var u = sortedCount[i];

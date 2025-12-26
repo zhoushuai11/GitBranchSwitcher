@@ -7,22 +7,22 @@ namespace GitBranchSwitcher
 {
     public static class CollectionService
     {
-        // 藏品存放目录：程序运行目录/Collect
-        private static string CollectDir => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Collect");
-
         /// <summary>
         /// 加载指定玩家的藏品列表
         /// </summary>
-        public static List<string> Load(string playerName)
+        /// <param name="rootPath">共享根目录 (例如 \\Server\Share)</param>
+        /// <param name="playerName">用户名</param>
+        public static List<string> Load(string rootPath, string playerName)
         {
             try
             {
-                if (!Directory.Exists(CollectDir))
+                string collectDir = Path.Combine(rootPath, "Collect");
+                if (!Directory.Exists(collectDir))
                 {
-                    Directory.CreateDirectory(CollectDir);
+                    try { Directory.CreateDirectory(collectDir); } catch { }
                 }
 
-                string filePath = Path.Combine(CollectDir, $"{playerName}.json");
+                string filePath = Path.Combine(collectDir, $"{playerName}.json");
                 if (File.Exists(filePath))
                 {
                     string json = File.ReadAllText(filePath);
@@ -38,16 +38,17 @@ namespace GitBranchSwitcher
         /// <summary>
         /// 保存指定玩家的藏品列表
         /// </summary>
-        public static void Save(string playerName, List<string> items)
+        public static void Save(string rootPath, string playerName, List<string> items)
         {
             try
             {
-                if (!Directory.Exists(CollectDir))
+                string collectDir = Path.Combine(rootPath, "Collect");
+                if (!Directory.Exists(collectDir))
                 {
-                    Directory.CreateDirectory(CollectDir);
+                    Directory.CreateDirectory(collectDir);
                 }
 
-                string filePath = Path.Combine(CollectDir, $"{playerName}.json");
+                string filePath = Path.Combine(collectDir, $"{playerName}.json");
                 string json = JsonSerializer.Serialize(items, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(filePath, json);
             }

@@ -5,13 +5,11 @@ using System.Linq;
 using System.Text.Json;
 
 namespace GitBranchSwitcher {
-    // 子仓库信息结构
     public class SubRepoItem {
         public string Name { get; set; } = "";
         public string FullPath { get; set; } = "";
     }
 
-    // 父节点缓存结构
     public class ParentRepoCache {
         public string ParentPath { get; set; } = "";
         public List<SubRepoItem> Children { get; set; } = new List<SubRepoItem>();
@@ -27,16 +25,15 @@ namespace GitBranchSwitcher {
         public List<ParentRepoCache> RepositoryCache { get; set; } = new List<ParentRepoCache>();
         public List<string> CachedBranchList { get; set; } = new List<string>();
 
-        // 图库根目录名称
-        public string PostcardLibraryRoot { get; set; } = "Img";
+        // [修改] 路径配置
+        public string LeaderboardPath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData\rank.json";
 
-        // [修改] 移除了 CollectedPostcards，改为由 CollectionService 独立管理
+        // 这是一个基础路径，用于推导 Img 和 Collect 目录
+        public string UpdateSourcePath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData";
 
         public DateTime LastStatDate { get; set; } = DateTime.MinValue;
         public int TodaySwitchCount { get; set; } = 0;
         public double TodayTotalSeconds { get; set; } = 0;
-        public string LeaderboardPath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData\rank.json";
-        public string UpdateSourcePath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData";
 
         private static string SettingsDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GitBranchSwitcher");
         private static string SettingsFile => Path.Combine(SettingsDir, "settings.json");
@@ -55,16 +52,17 @@ namespace GitBranchSwitcher {
 
             if (s.MaxParallel < 16)
                 s.MaxParallel = 16;
+
+            // [修改] 强制默认值，确保路径正确
             if (string.IsNullOrWhiteSpace(s.LeaderboardPath))
                 s.LeaderboardPath = @"\\SS-ZHOUSHUAI\GitRankData\rank.json";
+            if (string.IsNullOrWhiteSpace(s.UpdateSourcePath))
+                s.UpdateSourcePath = @"\\SS-ZHOUSHUAI\GitRankData";
+
             if (s.RepositoryCache == null)
                 s.RepositoryCache = new List<ParentRepoCache>();
             if (s.CachedBranchList == null)
                 s.CachedBranchList = new List<string>();
-            if (string.IsNullOrWhiteSpace(s.UpdateSourcePath))
-                s.UpdateSourcePath = @"\\SS-ZHOUSHUAI\GitRankData\";
-            if (string.IsNullOrWhiteSpace(s.PostcardLibraryRoot))
-                s.PostcardLibraryRoot = "Img";
 
             s.CheckDateReset();
             return s;
