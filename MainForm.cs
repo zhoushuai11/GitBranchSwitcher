@@ -64,7 +64,7 @@ namespace GitBranchSwitcher {
         private StatusStrip statusStrip;
         private ToolStripStatusLabel statusLabel, statusStats;
         private ToolStripProgressBar statusProgress;
-
+        private ToolStripStatusLabel statusTheme; // [修改] 增加 statusTheme
         // ==========================================
         // 数据与逻辑对象
         // ==========================================
@@ -167,10 +167,12 @@ namespace GitBranchSwitcher {
             TrySetRuntimeIcon();
             InitUi();
 #if !BOSS_MODE
-            LoadStateImagesRandom();
+            LoadRandomFrameWorkImage();
             LeaderboardService.SetPath(_settings.LeaderboardPath);
             _ = InitMyStatsAsync();
 #endif
+            UpdateThemeLabel();
+            ApplyThemeColors();
             SetSwitchState(SwitchState.NotStarted);
             SeedParentsToUi();
 
@@ -217,6 +219,37 @@ namespace GitBranchSwitcher {
             StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.BackColor = Color.WhiteSmoke;
+        }
+        
+        private void InitRandomTheme() {
+            // 如果已经有设置了，直接跳过
+            if (!string.IsNullOrEmpty(_settings.SelectedTheme)) return;
+
+            try {
+                string root = _settings.FrameWorkImgPath;
+                if (Directory.Exists(root)) {
+                    var dirs = Directory.GetDirectories(root);
+                    if (dirs.Length > 0) {
+                        // 随机选一个文件夹名作为默认主题
+                        string randomTheme = Path.GetFileName(dirs[new Random().Next(dirs.Length)]);
+                        _settings.SelectedTheme = randomTheme;
+                        _settings.Save();
+                        Log($"[System] 初始化随机主题: {randomTheme}");
+                    }
+                }
+            } catch (Exception ex) {
+                Log($"[System] 初始化主题失败: {ex.Message}");
+            }
+        }
+        // [新增] 更新界面上显示的主题名称
+        private void UpdateThemeLabel() {
+            if (statusTheme == null) return;
+    
+            string themeName = string.IsNullOrEmpty(_settings.SelectedTheme) ? "默认" : _settings.SelectedTheme;
+            statusTheme.Text = $"🎨 主题: {themeName}";
+    
+            // 适配一下深色模式的文字颜色
+            statusTheme.ForeColor = _settings.IsDarkMode ? Color.Gray : Color.DimGray;
         }
 
         private Button MakeBtn(string text, Color? backColor = null) {
@@ -365,6 +398,10 @@ namespace GitBranchSwitcher {
 #endif
             var btnSuperSlim = MakeBtn("🔥 一键瘦身", Color.MistyRose);
             btnSuperSlim.ForeColor = Color.DarkRed;
+            
+            // [新增] 设置按钮
+            var btnSettings = MakeBtn("⚙️ 设置", Color.WhiteSmoke);
+            btnSettings.ForeColor = Color.DimGray;
 
             repoToolbar.Controls.Add(btnToggleSelect);
             repoToolbar.Controls.Add(btnRescan);
@@ -379,6 +416,9 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnRank);
 #endif
             repoToolbar.Controls.Add(btnSuperSlim);
+            
+            // [新增] 将设置按钮加在瘦身按钮后面
+            repoToolbar.Controls.Add(btnSettings);
 
             lvRepos = new ListView {
                 Dock = DockStyle.Fill,
@@ -438,11 +478,11 @@ namespace GitBranchSwitcher {
                     }
                 }
             };
+            btnSettings.Click += (_, __) => ShowThemeSettingsDialog();
 #if !BOSS_MODE && !PURE_MODE
             btnRank.Click += (_, __) => ShowLeaderboard();
 #endif
             btnSuperSlim.Click += (_, __) => StartSuperSlimProcess();
-
             var listMenu = new ContextMenuStrip();
             listMenu.Items.Add("📂 打开文件夹", null, (_, __) => {
                 if (lvRepos.SelectedItems.Count > 0)
@@ -835,6 +875,13 @@ namespace GitBranchSwitcher {
             statusStrip.Items.Add(new ToolStripStatusLabel {
                 Spring = true
             });
+            // [新增] 主题显示标签
+            statusTheme = new ToolStripStatusLabel {
+                Alignment = ToolStripItemAlignment.Right,
+                ForeColor = Color.DimGray,
+                Margin = new Padding(0, 0, 10, 0)
+            };
+            statusStrip.Items.Add(statusTheme);
 #if !BOSS_MODE && !PURE_MODE
             statusStats = new ToolStripStatusLabel {
                 Alignment = ToolStripItemAlignment.Right, ForeColor = Color.SteelBlue, Margin = new Padding(0, 0, 10, 0)
@@ -885,10 +932,13 @@ namespace GitBranchSwitcher {
             var repo = (GitRepo)item.Tag;
             item.SubItems[1].Text = repo.CurrentBranch;
             item.UseItemStyleForSubItems = false;
+            // [修改] 适配深色模式：普通文字颜色跟随列表的前景色，或者手动指定
+            Color defaultTextColor = _settings.IsDarkMode ? Color.Gainsboro : Color.Black;
+
             if (repo.IsDirty)
-                item.SubItems[1].ForeColor = Color.ForestGreen;
+                item.SubItems[1].ForeColor = Color.ForestGreen; // 绿色在黑底白底都清楚
             else
-                item.SubItems[1].ForeColor = Color.Black;
+                item.SubItems[1].ForeColor = defaultTextColor; // [修改] 使用动态颜色
             string syncText = "";
             Color syncColor = Color.Gray;
             Font syncFont = item.Font;
@@ -898,7 +948,7 @@ namespace GitBranchSwitcher {
                     syncColor = Color.Gray;
                 } else if (repo.Incoming == 0 && repo.Outgoing == 0) {
                     syncText = "✔ 最新";
-                    syncColor = Color.Black;
+                    syncColor = defaultTextColor;
                 } else {
                     var sb = new List<string>();
                     bool hasPull = repo.Incoming > 0;
@@ -1435,7 +1485,7 @@ namespace GitBranchSwitcher {
 
         // 启动旅行动画
         private void StartFrogTravel() {
-            ApplyImageTo(pbState, "state_switching");
+            LoadRandomFrameWorkImage();
             lblStateText.Text = "🐸 呱呱去旅行了...";
             lblStateText.ForeColor = Color.ForestGreen;
         }
@@ -1516,7 +1566,7 @@ namespace GitBranchSwitcher {
             } else {
                 lblStateText.Text = $"🐸 去了{rarity}区但空手而归...";
                 lblStateText.ForeColor = Color.Gray;
-                ApplyImageTo(pbState, "state_done");
+                LoadRandomFrameWorkImage();
             }
         }
 
@@ -1719,8 +1769,15 @@ namespace GitBranchSwitcher {
 
 #if !BOSS_MODE && !PURE_MODE
             if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0, null, null);
+                // [修复开始] 计算当前已有的卡片数和分数，并在上传时传入
+                int currentCardCount = _myCollection.Count;
+                int currentScore = _myCollection.Sum(x => x.Score);
+
+                // 原代码是: UploadMyScoreAsync(totalSeconds, 0, null, null);
+                // 修改为传入 currentCardCount 和 currentScore:
+                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0, currentCardCount, currentScore);
                 UpdateStatsUi(nc, nt, ns);
+                // [修复结束]
             }
 #endif
 
@@ -1742,42 +1799,75 @@ namespace GitBranchSwitcher {
             }
         }
 
-        private void ApplyImageTo(PictureBox pb, string key) {
-#if BOSS_MODE
-            pb.Image = null;
-#else
-            if (pb.Image != null) {
-                var o = pb.Image;
-                pb.Image = null;
-                o.Dispose();
-            }
-
-            var img = ImageHelper.LoadRandomImageFromResource(key);
-            if (img != null) {
-                pb.Image = img;
-                AdjustPbSizeMode(pb);
-            }
-#endif
-        }
-
-        private void LoadStateImagesRandom() {
-            ApplyImageTo(pbState, "state_notstarted");
-        }
-
         private void SetSwitchState(SwitchState st) {
+            // 每次状态改变，都随机换一张图
+            LoadRandomFrameWorkImage();
+
             if (st == SwitchState.NotStarted) {
-                ApplyImageTo(pbState, "state_notstarted");
-                lblStateText.Text = "未开始";
+                lblStateText.Text = "Ready"; // 或者 "未开始"
+                lblStateText.ForeColor = Color.Gray;
             }
-
-            if (st == SwitchState.Switching) {
-                ApplyImageTo(pbState, "state_switching");
+            else if (st == SwitchState.Switching) {
                 lblStateText.Text = "切线中...";
+                lblStateText.ForeColor = Color.DodgerBlue;
             }
-
-            if (st == SwitchState.Done) {
-                ApplyImageTo(pbState, "state_done");
+            else if (st == SwitchState.Done) {
                 lblStateText.Text = "搞定!";
+                lblStateText.ForeColor = Color.ForestGreen;
+            }
+        }
+        
+        private void LoadRandomFrameWorkImage() {
+            try {
+                string rootPath = _settings.FrameWorkImgPath;
+        
+                // 确定最终的目标文件夹
+                string targetPath = rootPath;
+                if (!string.IsNullOrEmpty(_settings.SelectedTheme)) {
+                    string themePath = Path.Combine(rootPath, _settings.SelectedTheme);
+                    if (Directory.Exists(themePath)) {
+                        targetPath = themePath;
+                    }
+                }
+
+                if (!Directory.Exists(targetPath)) {
+                    pbState.Image = null;
+                    return;
+                }
+
+                // 扫描图片
+                var files = Directory.GetFiles(targetPath, "*.*")
+                    .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || 
+                                f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || 
+                                f.EndsWith(".gif", StringComparison.OrdinalIgnoreCase) ||
+                                f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (files.Count > 0) {
+                    string selectedFile = files[new Random().Next(files.Count)];
+            
+                    // 释放旧图片
+                    if (pbState.Image != null) {
+                        var old = pbState.Image;
+                        pbState.Image = null; // 先解绑
+                        old.Dispose();        // 再销毁
+                    }
+
+                    // [核心修复] 使用 MemoryStream 替代 FileStream
+                    // 1. 一次性读取文件字节，避免文件被持续锁定
+                    byte[] fileBytes = File.ReadAllBytes(selectedFile);
+            
+                    // 2. 创建内存流，注意：不要使用 'using'，也不要关闭它！
+                    // GDI+ 需要这个流一直活着，直到图片被 Dispose
+                    var ms = new MemoryStream(fileBytes);
+            
+                    // 3. 创建图片
+                    pbState.Image = Image.FromStream(ms);
+            
+                    AdjustPbSizeMode(pbState);
+                }
+            } catch (Exception ex) {
+                Log($"[UI] Load Theme Image Error: {ex.Message}");
             }
         }
 
@@ -1920,6 +2010,186 @@ namespace GitBranchSwitcher {
             }
 
             return new List<string>();
+        }
+
+        // [新增] 显示主题设置对话框
+        private void ShowThemeSettingsDialog() {
+            string rootPath = _settings.FrameWorkImgPath;
+
+            // 1. 检查根目录
+            if (!Directory.Exists(rootPath)) {
+                try {
+                    Directory.CreateDirectory(rootPath);
+                } catch {
+                    MessageBox.Show($"无法访问或创建资源目录:\n{rootPath}\n请检查网络或路径配置。");
+                    return;
+                }
+            }
+
+            // 2. 扫描子文件夹（主题）
+            var dirs = Directory.GetDirectories(rootPath);
+            var themeNames = dirs.Select(d => Path.GetFileName(d)).ToList();
+
+            if (themeNames.Count == 0) {
+                MessageBox.Show($"在以下路径未发现任何主题文件夹:\n{rootPath}\n\n请先在该目录下建立文件夹并放入图片。");
+                return;
+            }
+
+            using var form = new Form {
+                Text = "界面设置", // 标题稍微改一下
+                Width = 400,
+                Height = 300, //稍微加高一点
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = _settings.IsDarkMode? Color.FromArgb(32, 32, 32) : Color.WhiteSmoke, // 弹窗自己也适配一下
+                ForeColor = _settings.IsDarkMode? Color.Gainsboro : Color.Black
+            };
+
+            var lblInfo = new Label {
+                Text = "🎨 主题风格 (图片):",
+                Top = 20,
+                Left = 20,
+                AutoSize = true,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold)
+            };
+
+            var cmbThemes = new ComboBox {
+                Top = 50,
+                Left = 20,
+                Width = 340,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 10),
+                BackColor = _settings.IsDarkMode? Color.FromArgb(45, 45, 48) : Color.White,
+                ForeColor = _settings.IsDarkMode? Color.Gainsboro : Color.Black
+            };
+            cmbThemes.Items.AddRange(themeNames.ToArray());
+
+            // 选中当前主题
+            if (!string.IsNullOrEmpty(_settings.SelectedTheme) && themeNames.Contains(_settings.SelectedTheme)) {
+                cmbThemes.SelectedItem = _settings.SelectedTheme;
+            } else if (themeNames.Count > 0) {
+                cmbThemes.SelectedIndex = 0;
+            }
+
+            // [新增] 深色模式复选框
+            var chkDarkMode = new CheckBox {
+                Text = "🌙 开启深色模式 (Dark Mode)",
+                Top = 90,
+                Left = 20,
+                Width = 340,
+                Font = new Font("Segoe UI", 10),
+                Checked = _settings.IsDarkMode,
+                Cursor = Cursors.Hand
+            };
+
+            var btnOk = new Button {
+                Text = "💾 保存并应用",
+                Top = 140,
+                Left = 20,
+                Width = 340,
+                Height = 40,
+                BackColor = Color.DodgerBlue,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                DialogResult = DialogResult.OK
+            };
+            btnOk.FlatAppearance.BorderSize = 0;
+
+            var lblPath = new Label {
+                Text = $"资源路径: {rootPath}",
+                Top = 200,
+                Left = 20,
+                Width = 340,
+                ForeColor = Color.Gray,
+                Font = new Font("Segoe UI", 8)
+            };
+
+            form.Controls.AddRange(new Control[] {
+                lblInfo, cmbThemes, chkDarkMode, btnOk, lblPath
+            });
+            form.AcceptButton = btnOk;
+
+            if (form.ShowDialog(this) == DialogResult.OK) {
+                bool needApply = false;
+
+                // 保存主题
+                string selected = cmbThemes.SelectedItem?.ToString();
+                if (!string.IsNullOrEmpty(selected) && selected != _settings.SelectedTheme) {
+                    _settings.SelectedTheme = selected;
+                    LoadRandomFrameWorkImage(); // 刷新图片
+                    needApply = true;
+                }
+
+                // [新增] 保存深色模式
+                if (chkDarkMode.Checked != _settings.IsDarkMode) {
+                    _settings.IsDarkMode = chkDarkMode.Checked;
+                    ApplyThemeColors(); // 刷新颜色
+                    needApply = true;
+                }
+
+                if (needApply) {
+                    _settings.Save();
+                    UpdateThemeLabel();
+                    MessageBox.Show("设置已保存！");
+                }
+            }
+        }
+        
+        private void ApplyThemeColors() {
+            bool dark = _settings.IsDarkMode;
+
+            // 定义调色板
+            Color formBack = dark ? Color.FromArgb(32, 32, 32) : Color.WhiteSmoke;
+            Color formFore = dark ? Color.Gainsboro : Color.Black;
+            Color controlBack = dark ? Color.FromArgb(45, 45, 48) : Color.White;
+            Color controlFore = dark ? Color.Gainsboro : Color.Black;
+    
+            // 1. 设置主窗体
+            this.BackColor = formBack;
+            this.ForeColor = formFore;
+
+            // 2. 设置容器标题颜色 (GroupBox)
+            Control[] groups = { grpTop, grpList, grpActions, grpDetails, grpLog };
+            foreach (var g in groups) {
+                if (g != null) g.ForeColor = formFore;
+            }
+
+            // 3. 设置列表和输入框 (List/Edit)
+            Control[] lists = { lbParents, lvRepos, lvFileChanges, txtLog, txtCommitMsg, cmbTargetBranch, txtCommitMsg };
+            foreach (var c in lists) {
+                if (c != null) {
+                    c.BackColor = controlBack;
+                    c.ForeColor = controlFore;
+                }
+            }
+
+            // 4. 设置标签 (Label)
+            // 排除 lblStateText 因为它是动态颜色的
+            Control[] labels = { lblTargetBranch, lblRepoInfo, lblFetchStatus };
+            foreach (var l in labels) {
+                if (l != null) l.ForeColor = formFore;
+            }
+
+            // 5. 特殊处理独立窗口
+            if (consoleWindow != null) {
+                consoleWindow.BackColor = formBack;
+                consoleWindow.ForeColor = formFore;
+            }
+    
+            // 6. 强制刷新列表项颜色 (因为 ListViewItem 颜色可能是之前渲染的)
+            if (lvRepos != null && lvRepos.Items.Count > 0) {
+                lvRepos.BeginUpdate();
+                foreach (ListViewItem item in lvRepos.Items) {
+                    RenderRepoItem(item);
+                }
+                lvRepos.EndUpdate();
+            }
+            if (statusTheme != null) {
+                statusTheme.ForeColor = _settings.IsDarkMode ? Color.Gray : Color.DimGray;
+            }
         }
     }
 }

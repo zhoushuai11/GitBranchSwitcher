@@ -30,6 +30,9 @@ namespace GitBranchSwitcher {
 
         // 这是一个基础路径，用于推导 Img 和 Collect 目录
         public string UpdateSourcePath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData";
+        public string FrameWorkImgPath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData\FrameWork";
+        public string SelectedTheme { get; set; } = "";
+        public bool IsDarkMode { get; set; } = false;
 
         public DateTime LastStatDate { get; set; } = DateTime.MinValue;
         public int TodaySwitchCount { get; set; } = 0;
