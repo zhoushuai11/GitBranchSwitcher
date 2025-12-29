@@ -32,6 +32,7 @@ namespace GitBranchSwitcher {
         public string UpdateSourcePath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData";
         public string FrameWorkImgPath { get; set; } = @"\\SS-ZHOUSHUAI\GitRankData\FrameWork";
         public string SelectedTheme { get; set; } = "";
+        public string SelectedCollectionItem { get; set; } = "Random";
         public bool IsDarkMode { get; set; } = false;
 
         public DateTime LastStatDate { get; set; } = DateTime.MinValue;

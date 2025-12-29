@@ -9,8 +9,8 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.1.8.0</AssemblyVersion>
-        <FileVersion>1.1.8.0</FileVersion>
+        <AssemblyVersion>1.2.1.0</AssemblyVersion>
+        <FileVersion>1.2.1.0</FileVersion>
 
         <IsBetaMode>false</IsBetaMode>
 
@@ -22,7 +22,7 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 增加抽卡机制，宝批狂喜。
+            1. 增加主题风格，支持自由切换。
         </ReleaseNote>
 
         <DeployRootPath>H:\GitFleetManagerProjectRoot\GitRankData</DeployRootPath>

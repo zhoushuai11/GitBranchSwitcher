@@ -78,6 +78,10 @@ namespace GitBranchSwitcher {
 
         // 本地内存缓存
         private List<CollectedItem> _myCollection = new List<CollectedItem>();
+        
+        private const string THEME_NONE = "🚫 无主题 (None)";
+        private const string THEME_COLLECTION = "🌟 我的收藏 (My Collection)";
+        private const string COLL_RANDOM = "🎲 随机展示 (Random)";
 
         private enum SwitchState {
             NotStarted,
@@ -241,14 +245,22 @@ namespace GitBranchSwitcher {
                 Log($"[System] 初始化主题失败: {ex.Message}");
             }
         }
-        // [新增] 更新界面上显示的主题名称
+        
+        // [修改] UpdateThemeLabel 方法
         private void UpdateThemeLabel() {
             if (statusTheme == null) return;
     
-            string themeName = string.IsNullOrEmpty(_settings.SelectedTheme) ? "默认" : _settings.SelectedTheme;
-            statusTheme.Text = $"🎨 主题: {themeName}";
-    
-            // 适配一下深色模式的文字颜色
+            string display;
+            if (string.IsNullOrEmpty(_settings.SelectedTheme) || _settings.SelectedTheme == THEME_NONE) {
+                display = "无主题";
+            } else if (_settings.SelectedTheme == THEME_COLLECTION) {
+                string sub = _settings.SelectedCollectionItem == "Random" ? "随机" : "固定";
+                display = $"收藏品 ({sub})";
+            } else {
+                display = _settings.SelectedTheme; // 普通主题名
+            }
+
+            statusTheme.Text = $"🎨 主题: {display}";
             statusTheme.ForeColor = _settings.IsDarkMode ? Color.Gray : Color.DimGray;
         }
 
@@ -1816,58 +1828,73 @@ namespace GitBranchSwitcher {
                 lblStateText.ForeColor = Color.ForestGreen;
             }
         }
-        
+
+        // [重写] MainForm.cs -> LoadRandomFrameWorkImage 方法
         private void LoadRandomFrameWorkImage() {
             try {
-                string rootPath = _settings.FrameWorkImgPath;
-        
-                // 确定最终的目标文件夹
-                string targetPath = rootPath;
-                if (!string.IsNullOrEmpty(_settings.SelectedTheme)) {
-                    string themePath = Path.Combine(rootPath, _settings.SelectedTheme);
-                    if (Directory.Exists(themePath)) {
-                        targetPath = themePath;
-                    }
+                // 0. 清理旧图片 (通用操作)
+                if (pbState.Image != null) {
+                    var old = pbState.Image;
+                    pbState.Image = null;
+                    old.Dispose();
                 }
 
-                if (!Directory.Exists(targetPath)) {
-                    pbState.Image = null;
+                string theme = _settings.SelectedTheme;
+
+                // === Case 1: 无主题 (默认) ===
+                if (string.IsNullOrEmpty(theme) || theme == THEME_NONE) {
+                    // 保持 Image 为 null 即可
                     return;
                 }
 
-                // 扫描图片
-                var files = Directory.GetFiles(targetPath, "*.*")
-                    .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || 
-                                f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || 
-                                f.EndsWith(".gif", StringComparison.OrdinalIgnoreCase) ||
-                                f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                string imagePathToLoad = null;
 
-                if (files.Count > 0) {
-                    string selectedFile = files[new Random().Next(files.Count)];
-            
-                    // 释放旧图片
-                    if (pbState.Image != null) {
-                        var old = pbState.Image;
-                        pbState.Image = null; // 先解绑
-                        old.Dispose();        // 再销毁
+                // === Case 2: 收藏品模式 ===
+                if (theme == THEME_COLLECTION) {
+                    if (_myCollection.Count == 0)
+                        return; // 没东西可显示
+
+                    CollectedItem targetItem = null;
+
+                    if (_settings.SelectedCollectionItem == "Random" || string.IsNullOrEmpty(_settings.SelectedCollectionItem)) {
+                        // 随机选一张
+                        targetItem = _myCollection[new Random().Next(_myCollection.Count)];
+                    } else {
+                        // 找指定的图片
+                        targetItem = _myCollection.FirstOrDefault(x => x.FileName == _settings.SelectedCollectionItem);
+                        // 如果找不到(可能被删了)，回退到随机
+                        if (targetItem == null)
+                            targetItem = _myCollection[new Random().Next(_myCollection.Count)];
                     }
 
-                    // [核心修复] 使用 MemoryStream 替代 FileStream
-                    // 1. 一次性读取文件字节，避免文件被持续锁定
-                    byte[] fileBytes = File.ReadAllBytes(selectedFile);
-            
-                    // 2. 创建内存流，注意：不要使用 'using'，也不要关闭它！
-                    // GDI+ 需要这个流一直活着，直到图片被 Dispose
+                    if (targetItem != null) {
+                        // 拼接完整路径: UpdateSourcePath/Img/{Rarity}/{FileName}
+                        imagePathToLoad = Path.Combine(_settings.UpdateSourcePath, "Img", targetItem.Rarity, targetItem.FileName);
+                    }
+                }
+                // === Case 3: 文件夹主题模式 ===
+                else {
+                    string rootPath = _settings.FrameWorkImgPath;
+                    string themePath = Path.Combine(rootPath, theme);
+
+                    if (Directory.Exists(themePath)) {
+                        var files = Directory.GetFiles(themePath, "*.*").Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".gif", StringComparison.OrdinalIgnoreCase)).ToList();
+
+                        if (files.Count > 0) {
+                            imagePathToLoad = files[new Random().Next(files.Count)];
+                        }
+                    }
+                }
+
+                // === 执行加载 ===
+                if (!string.IsNullOrEmpty(imagePathToLoad) && File.Exists(imagePathToLoad)) {
+                    byte[] fileBytes = File.ReadAllBytes(imagePathToLoad);
                     var ms = new MemoryStream(fileBytes);
-            
-                    // 3. 创建图片
                     pbState.Image = Image.FromStream(ms);
-            
                     AdjustPbSizeMode(pbState);
                 }
             } catch (Exception ex) {
-                Log($"[UI] Load Theme Image Error: {ex.Message}");
+                Log($"[UI] Load Image Error: {ex.Message}");
             }
         }
 
@@ -2012,43 +2039,34 @@ namespace GitBranchSwitcher {
             return new List<string>();
         }
 
-        // [新增] 显示主题设置对话框
+        // [重写] MainForm.cs -> ShowThemeSettingsDialog 方法
         private void ShowThemeSettingsDialog() {
             string rootPath = _settings.FrameWorkImgPath;
 
-            // 1. 检查根目录
-            if (!Directory.Exists(rootPath)) {
-                try {
-                    Directory.CreateDirectory(rootPath);
-                } catch {
-                    MessageBox.Show($"无法访问或创建资源目录:\n{rootPath}\n请检查网络或路径配置。");
-                    return;
-                }
-            }
-
-            // 2. 扫描子文件夹（主题）
-            var dirs = Directory.GetDirectories(rootPath);
-            var themeNames = dirs.Select(d => Path.GetFileName(d)).ToList();
-
-            if (themeNames.Count == 0) {
-                MessageBox.Show($"在以下路径未发现任何主题文件夹:\n{rootPath}\n\n请先在该目录下建立文件夹并放入图片。");
-                return;
+            // 1. 准备主题列表
+            var themeList = new List<string> {
+                THEME_NONE, THEME_COLLECTION
+            }; // 固定选项
+            if (Directory.Exists(rootPath)) {
+                var dirs = Directory.GetDirectories(rootPath);
+                themeList.AddRange(dirs.Select(d => Path.GetFileName(d)));
             }
 
             using var form = new Form {
-                Text = "界面设置", // 标题稍微改一下
-                Width = 400,
-                Height = 300, //稍微加高一点
+                Text = "界面设置",
+                Width = 450, // 稍微加宽以容纳长文件名
+                Height = 350,
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
                 MinimizeBox = false,
-                BackColor = _settings.IsDarkMode? Color.FromArgb(32, 32, 32) : Color.WhiteSmoke, // 弹窗自己也适配一下
+                BackColor = _settings.IsDarkMode? Color.FromArgb(32, 32, 32) : Color.WhiteSmoke,
                 ForeColor = _settings.IsDarkMode? Color.Gainsboro : Color.Black
             };
 
-            var lblInfo = new Label {
-                Text = "🎨 主题风格 (图片):",
+            // === UI 控件 ===
+            var lblTheme = new Label {
+                Text = "🎨 主题风格:",
                 Top = 20,
                 Left = 20,
                 AutoSize = true,
@@ -2058,27 +2076,85 @@ namespace GitBranchSwitcher {
             var cmbThemes = new ComboBox {
                 Top = 50,
                 Left = 20,
-                Width = 340,
+                Width = 390,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = new Font("Segoe UI", 10),
                 BackColor = _settings.IsDarkMode? Color.FromArgb(45, 45, 48) : Color.White,
                 ForeColor = _settings.IsDarkMode? Color.Gainsboro : Color.Black
             };
-            cmbThemes.Items.AddRange(themeNames.ToArray());
+            cmbThemes.Items.AddRange(themeList.ToArray());
 
-            // 选中当前主题
-            if (!string.IsNullOrEmpty(_settings.SelectedTheme) && themeNames.Contains(_settings.SelectedTheme)) {
-                cmbThemes.SelectedItem = _settings.SelectedTheme;
-            } else if (themeNames.Count > 0) {
-                cmbThemes.SelectedIndex = 0;
-            }
-
-            // [新增] 深色模式复选框
-            var chkDarkMode = new CheckBox {
-                Text = "🌙 开启深色模式 (Dark Mode)",
+            // [新增] 收藏品选择区域 (默认隐藏)
+            var lblColl = new Label {
+                Text = "🖼️ 选择展示的收藏品:",
                 Top = 90,
                 Left = 20,
-                Width = 340,
+                AutoSize = true,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Visible = false
+            };
+
+            var cmbCollection = new ComboBox {
+                Top = 120,
+                Left = 20,
+                Width = 390,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 10),
+                BackColor = _settings.IsDarkMode? Color.FromArgb(45, 45, 48) : Color.White,
+                ForeColor = _settings.IsDarkMode? Color.Gainsboro : Color.Black,
+                Visible = false
+            };
+
+            // 填充收藏品列表
+            cmbCollection.Items.Add(COLL_RANDOM);
+            // 按稀有度排序：UR > SSR > SR > R > N
+            var sortedCollection = _myCollection.OrderByDescending(x => GetRarityWeight(x.Rarity)).ThenByDescending(x => x.CollectTime).ToList();
+
+            foreach (var item in sortedCollection) {
+                cmbCollection.Items.Add($"[{item.Rarity}] {Path.GetFileNameWithoutExtension(item.FileName)}");
+            }
+
+            // === 联动逻辑 ===
+            cmbThemes.SelectedIndexChanged += (_, __) => {
+                bool isColl = cmbThemes.SelectedItem?.ToString() == THEME_COLLECTION;
+                lblColl.Visible = isColl;
+                cmbCollection.Visible = isColl;
+
+                // 调整窗体布局（如果是收藏模式，把下面的控件往下推）
+                int offset = isColl? 70 : 0;
+                // 这里只是简单的动态布局示意，实际可以用 Panel
+            };
+
+            // === 初始化选中状态 ===
+            string currentTheme = _settings.SelectedTheme;
+            if (string.IsNullOrEmpty(currentTheme))
+                currentTheme = THEME_NONE; // 默认无主题
+
+            if (themeList.Contains(currentTheme))
+                cmbThemes.SelectedItem = currentTheme;
+            else
+                cmbThemes.SelectedIndex = 0; // 默认选第一项
+
+            // 初始化收藏品选中
+            if (_settings.SelectedCollectionItem == "Random" || string.IsNullOrEmpty(_settings.SelectedCollectionItem)) {
+                cmbCollection.SelectedIndex = 0;
+            } else {
+                // 尝试通过文件名匹配
+                string target = _settings.SelectedCollectionItem;
+                for (int i = 0; i < cmbCollection.Items.Count; i++) {
+                    if (cmbCollection.Items[i].ToString().Contains(target)) {
+                        cmbCollection.SelectedIndex = i;
+                        break;
+                    }
+                }
+            }
+
+            // === 其他控件 ===
+            var chkDarkMode = new CheckBox {
+                Text = "🌙 开启深色模式 (Dark Mode)",
+                Top = 200,
+                Left = 20,
+                Width = 390, // 位置稍微下移
                 Font = new Font("Segoe UI", 10),
                 Checked = _settings.IsDarkMode,
                 Cursor = Cursors.Hand
@@ -2086,9 +2162,9 @@ namespace GitBranchSwitcher {
 
             var btnOk = new Button {
                 Text = "💾 保存并应用",
-                Top = 140,
+                Top = 240,
                 Left = 20,
-                Width = 340,
+                Width = 390,
                 Height = 40,
                 BackColor = Color.DodgerBlue,
                 ForeColor = Color.White,
@@ -2098,44 +2174,74 @@ namespace GitBranchSwitcher {
             };
             btnOk.FlatAppearance.BorderSize = 0;
 
-            var lblPath = new Label {
-                Text = $"资源路径: {rootPath}",
-                Top = 200,
-                Left = 20,
-                Width = 340,
-                ForeColor = Color.Gray,
-                Font = new Font("Segoe UI", 8)
-            };
-
             form.Controls.AddRange(new Control[] {
-                lblInfo, cmbThemes, chkDarkMode, btnOk, lblPath
+                lblTheme, cmbThemes, lblColl, cmbCollection, chkDarkMode, btnOk
             });
             form.AcceptButton = btnOk;
 
+            // 触发一次联动以设置初始可见性
+            // Hack: 手动调用事件处理逻辑
+            bool showColl = cmbThemes.SelectedItem?.ToString() == THEME_COLLECTION;
+            lblColl.Visible = showColl;
+            cmbCollection.Visible = showColl;
+
+            // === 保存逻辑 ===
             if (form.ShowDialog(this) == DialogResult.OK) {
                 bool needApply = false;
 
-                // 保存主题
-                string selected = cmbThemes.SelectedItem?.ToString();
-                if (!string.IsNullOrEmpty(selected) && selected != _settings.SelectedTheme) {
-                    _settings.SelectedTheme = selected;
-                    LoadRandomFrameWorkImage(); // 刷新图片
+                // 1. 保存主题
+                string newTheme = cmbThemes.SelectedItem?.ToString();
+                if (newTheme == THEME_NONE)
+                    newTheme = ""; // 空字符串代表无主题
+
+                if (newTheme != _settings.SelectedTheme) {
+                    _settings.SelectedTheme = newTheme;
                     needApply = true;
                 }
 
-                // [新增] 保存深色模式
+                // 2. 保存收藏品设置
+                if (newTheme == THEME_COLLECTION) {
+                    if (cmbCollection.SelectedIndex == 0) {
+                        _settings.SelectedCollectionItem = "Random";
+                    } else {
+                        // 从显示的文本 "[SSR] Name" 中提取真实文件名
+                        // 对应上面的 sortedCollection 索引 (注意索引 -1 因为第0项是Random)
+                        int index = cmbCollection.SelectedIndex - 1;
+                        if (index >= 0 && index < sortedCollection.Count) {
+                            _settings.SelectedCollectionItem = sortedCollection[index].FileName;
+                        }
+                    }
+
+                    needApply = true; // 即使主题没变，换了图片也要刷新
+                }
+
+                // 3. 保存深色模式
                 if (chkDarkMode.Checked != _settings.IsDarkMode) {
                     _settings.IsDarkMode = chkDarkMode.Checked;
-                    ApplyThemeColors(); // 刷新颜色
+                    ApplyThemeColors();
                     needApply = true;
                 }
 
                 if (needApply) {
                     _settings.Save();
-                    UpdateThemeLabel();
+                    UpdateThemeLabel(); // 更新状态栏文字
+                    LoadRandomFrameWorkImage(); // 立即刷新图片
                     MessageBox.Show("设置已保存！");
                 }
             }
+        }
+
+        // [辅助] 稀有度权重排序
+        private int GetRarityWeight(string r) {
+            if (r == "UR")
+                return 5;
+            if (r == "SSR")
+                return 4;
+            if (r == "SR")
+                return 3;
+            if (r == "R")
+                return 2;
+            return 1;
         }
         
         private void ApplyThemeColors() {
