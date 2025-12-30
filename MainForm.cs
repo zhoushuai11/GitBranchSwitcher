@@ -614,6 +614,12 @@ namespace GitBranchSwitcher {
                 _settings.Save();
             };
 
+            // 1. 定义新按钮
+            var btnFloatMode = MakeBtn("🎈 悬浮模式 (Float)", Color.LightPink);
+            btnFloatMode.Height = 32;
+            btnFloatMode.Dock = DockStyle.Top;
+            btnFloatMode.Click += (_, __) => EnterFloatMode(); // 绑定事件
+            
             btnToggleConsole = MakeBtn("💻 打开 Git 控制台", Color.OldLace);
             btnToggleConsole.Height = 32;
             btnToggleConsole.Dock = DockStyle.Top;
@@ -624,8 +630,14 @@ namespace GitBranchSwitcher {
             btnMyCollection.Click += (_, __) => new CollectionForm().Show();
 
             var pnlBtnsWrap = new Panel {
-                Height = 70, Dock = DockStyle.Top, Padding = new Padding(0, 6, 0, 0)
+                Height = 110, // [修改] 增加高度以容纳新按钮 (原 70 -> 110)
+                Dock = DockStyle.Top, 
+                Padding = new Padding(0, 6, 0, 0)
             };
+            pnlBtnsWrap.Controls.Add(btnFloatMode);      // 新增：悬浮按钮放在最下面
+            pnlBtnsWrap.Controls.Add(btnMyCollection);   // 藏品
+            pnlBtnsWrap.Controls.Add(btnToggleConsole);  // 控制台
+            
             pnlBtnsWrap.Controls.Add(btnMyCollection);
             pnlBtnsWrap.Controls.Add(btnToggleConsole);
 
@@ -2321,6 +2333,34 @@ namespace GitBranchSwitcher {
             if (statusTheme != null) {
                 statusTheme.ForeColor = _settings.IsDarkMode ? Color.Gray : Color.DimGray;
             }
+        }
+        
+        private void EnterFloatMode()
+        {
+            // 获取当前展示的图片 (青蛙图或藏品图)
+            Image currentImg = pbState.Image;
+
+            // 如果当前没有图片，就加载 AppIcon 或者默认图
+            if (currentImg == null)
+            {
+                try 
+                { 
+                    currentImg = Icon.ToBitmap(); 
+                } 
+                catch 
+                { 
+                    // 如果连图标都没有，画一个带颜色的方块
+                    var bmp = new Bitmap(100, 100);
+                    using(var g = Graphics.FromImage(bmp)) g.Clear(Color.DeepSkyBlue);
+                    currentImg = bmp;
+                }
+            }
+
+            // 创建悬浮窗，传入当前主窗体引用和图片
+            var floatForm = new FloatIconForm(this, currentImg);
+    
+            floatForm.Show();
+            this.Hide(); // 隐藏主窗体
         }
     }
 }
