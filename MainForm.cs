@@ -164,6 +164,31 @@ namespace GitBranchSwitcher {
         public MainForm() {
             _settings = AppSettings.Load();
 
+            // ========================================================
+            // [修改] 启动时自动登录共享文件夹，并检查结果
+            // ========================================================
+            try {
+                // 这里的路径必须是共享根目录 (不包含子文件夹)
+                string shareRoot = @"\\s4.biubiubiu.io\share"; 
+                string user = "sausage";
+                string pass = "sausage@0592";
+
+                int result = NetworkShare.Connect(shareRoot, user, pass);
+        
+                // 0 = 成功, 85 = 已经连接
+                if (result != 0 && result != 85) {
+                    // 如果连接失败，记录日志或者弹窗（调试阶段建议弹窗，稳定后可移除）
+                    // MessageBox.Show($"连接共享服务器失败，错误代码: {result}\n部分功能可能无法使用。", "网络警告");
+                }
+            } catch (Exception ex) {
+                // System.Diagnostics.Debug.WriteLine($"[Network] 连接异常: {ex.Message}");
+            }
+            // ========================================================
+
+            _myCollection = CollectionService.Load(_settings.UpdateSourcePath, Environment.UserName);
+
+            InitializeComponent();
+            
             // 加载我的藏品
             _myCollection = CollectionService.Load(_settings.UpdateSourcePath, Environment.UserName);
 
