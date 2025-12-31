@@ -564,11 +564,29 @@ namespace GitBranchSwitcher {
             cmbTargetBranch = new ComboBox {
                 Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDown
             };
+            
+            // === [开始修改] ===
+            
+            // 1. 原有的 "填入" 按钮
             btnUseCurrentBranch = MakeBtn("👈 填入");
             btnUseCurrentBranch.Dock = DockStyle.Right;
             btnUseCurrentBranch.Width = 60;
-            pnlComboRow.Controls.Add(cmbTargetBranch);
-            pnlComboRow.Controls.Add(btnUseCurrentBranch);
+
+            // 2. [新增] "收藏" 按钮
+            var btnFav = MakeBtn("⭐ 收藏", Color.LightYellow); // 使用淡黄色区分
+            btnFav.Dock = DockStyle.Right;
+            btnFav.Width = 60;
+            btnFav.Click += (_, __) => {
+                var frm = new BranchFavoritesForm(_settings, (selectedBranch) => {
+                    cmbTargetBranch.Text = selectedBranch;
+                });
+                frm.ShowDialog(this);
+            };
+
+            // 3. 将控件加入面板 (注意顺序：先加靠右的)
+            pnlComboRow.Controls.Add(btnUseCurrentBranch);               // 最右边
+            pnlComboRow.Controls.Add(btnFav);  // 收藏的左边
+            pnlComboRow.Controls.Add(cmbTargetBranch);      // 填满剩余空间
 
             var pnlSpacer1 = new Panel {
                 Height = 5, Dock = DockStyle.Top

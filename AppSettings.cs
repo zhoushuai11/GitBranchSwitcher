@@ -24,7 +24,9 @@ namespace GitBranchSwitcher {
         public List<string> ParentPaths { get; set; } = new List<string>();
         public List<ParentRepoCache> RepositoryCache { get; set; } = new List<ParentRepoCache>();
         public List<string> CachedBranchList { get; set; } = new List<string>();
-
+        
+        public List<FavoriteItem> FavoriteBranches { get; set; } = new List<FavoriteItem>();
+        
         // [修改] 路径配置：更新为新的共享地址
         public string LeaderboardPath { get; set; } = @"\\s4.biubiubiu.io\share\rank.json";
 
@@ -97,5 +99,12 @@ namespace GitBranchSwitcher {
                 TodayTotalSeconds = 0;
             }
         }
+    }
+    
+    // [新增] 用于存储单条收藏记录的类
+    public class FavoriteItem
+    {
+        public string Branch { get; set; } = ""; // 分支名称
+        public string Remark { get; set; } = ""; // 备注信息
     }
 }
