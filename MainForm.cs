@@ -976,6 +976,8 @@ namespace GitBranchSwitcher {
                     cmbTargetBranch.Text = repo.CurrentBranch;
                 }
             };
+            
+            InitMarqueeAnimation();
         }
 
         // ... (SeedParentsToUi, RenderRepoItem, BatchSyncStatusUpdate 等逻辑) ...
@@ -2379,6 +2381,158 @@ namespace GitBranchSwitcher {
     
             floatForm.Show();
             this.Hide(); // 隐藏主窗体
+        }
+        
+        // ==========================================
+        // 跑马灯逻辑 (堆叠星星 -> 替换文字 修复版)
+        // ==========================================
+        
+        // 核心变量
+        private System.Windows.Forms.Timer marqueeTimer;
+        private string _cleanBaseTitle;          // 保存纯净的原始标题
+        private const string MARQUEE_SEPARATOR = "   |   "; // 分隔符
+        
+        // 动画状态
+        private int _marqueeLoopCount = 0;       
+        private const int MAX_MARQUEE_LOOPS = 3; 
+        private string _marqueeTargetText = "";  // 最终要显示的文本
+        private char[] _marqueeBuffer;           // 显示缓冲区
+        private int _marqueeStepIndex = 0;       // 当前步数
+        private int _marqueePhase = 0;           // 0:堆星, 1:换字, 2:保持, 3:结束
+        private int _marqueeHoldTicks = 0;       // 保持计时器
+
+        // [辅助] 获取程序纯净标题
+        private string GetBaseTitle() {
+            try {
+                var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+                string vStr = $"{version.Major}.{version.Minor}.{version.Build}";
+                return $"Git 分支管理工具 - v{vStr}";
+            } catch {
+                return "Git 分支管理工具";
+            }
+        }
+
+        // [核心] 初始化跑马灯
+        // 务必在 InitUi() 最后一行调用
+        private async void InitMarqueeAnimation() {
+            // 1. 销毁旧定时器
+            if (marqueeTimer != null) {
+                marqueeTimer.Stop();
+                marqueeTimer.Dispose();
+                marqueeTimer = null;
+            }
+
+            // 2. 还原标题
+            _cleanBaseTitle = GetBaseTitle();
+            this.Text = _cleanBaseTitle;
+
+            // 3. 读取公告 (关键：限制长度防止显示不全)
+            string textToShow = "祝您 2026 年：开局即高配，满屏皆金色！新年快乐！"; 
+            try {
+                string noticePath = Path.Combine(_settings.UpdateSourcePath, "notice.txt");
+                var readTask = Task.Run(() => {
+                    if (File.Exists(noticePath)) {
+                        return File.ReadAllText(noticePath).Trim();
+                    }
+                    return null;
+                });
+
+                if (await Task.WhenAny(readTask, Task.Delay(2000)) == readTask) {
+                    string content = await readTask;
+                    if (!string.IsNullOrEmpty(content)) {
+                        string line = content.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)[0];
+                        // [关键修复] 强制截断长度为 35，防止撑爆标题栏
+                        if (line.Length > 35) line = line.Substring(0, 34) + "…";
+                        textToShow = line;
+                    }
+                }
+            } catch (Exception ex) {
+                Log($"[Marquee] Error: {ex.Message}");
+            }
+
+            _marqueeTargetText = textToShow;
+
+            // 4. 初始化缓冲区 (全空格)
+            _marqueeBuffer = new char[_marqueeTargetText.Length];
+            for(int i = 0; i < _marqueeBuffer.Length; i++) _marqueeBuffer[i] = ' ';
+
+            // 5. 重置状态
+            _marqueeLoopCount = 0;
+            ResetMarqueeState();
+
+            // 6. 启动定时器
+            marqueeTimer = new System.Windows.Forms.Timer();
+            marqueeTimer.Interval = 80; // 加快一点速度，效果更流畅
+            marqueeTimer.Tick += MarqueeTimer_Tick;
+            marqueeTimer.Start();
+        }
+
+        private void ResetMarqueeState() {
+            _marqueePhase = 0;      // 回到 Phase 0: 堆星星
+            _marqueeStepIndex = 0;  
+            _marqueeHoldTicks = 0;
+            // 重置缓冲区为空格
+            for (int i = 0; i < _marqueeBuffer.Length; i++) _marqueeBuffer[i] = ' ';
+        }
+
+        // [核心] 动画逻辑
+        private void MarqueeTimer_Tick(object sender, EventArgs e) {
+            if (_marqueeBuffer == null || string.IsNullOrEmpty(_marqueeTargetText)) return;
+            int len = _marqueeTargetText.Length;
+
+            // Phase 0: 从右往左堆叠星星
+            // 初始: "       "
+            // Tick 1: "      ★" (index = len-1)
+            // Tick 2: "     ★★" (index = len-2)
+            if (_marqueePhase == 0) {
+                int targetIndex = len - 1 - _marqueeStepIndex; // 倒序填充
+
+                if (targetIndex >= 0) {
+                    _marqueeBuffer[targetIndex] = '★'; 
+                    _marqueeStepIndex++;
+                } else {
+                    // 填满了，进入下一阶段
+                    _marqueePhase = 1;
+                    _marqueeStepIndex = 0;
+                }
+            }
+            // Phase 1: 从左往右替换为文字
+            // 初始: "★★★★★★★"
+            // Tick 1: "G★★★★★★" (index = 0)
+            // Tick 2: "Gi★★★★★" (index = 1)
+            else if (_marqueePhase == 1) {
+                int targetIndex = _marqueeStepIndex; // 正序替换
+
+                if (targetIndex < len) {
+                    _marqueeBuffer[targetIndex] = _marqueeTargetText[targetIndex];
+                    _marqueeStepIndex++;
+                } else {
+                    // 替换完了，进入保持阶段
+                    _marqueePhase = 2;
+                }
+            }
+            // Phase 2: 保持展示
+            else if (_marqueePhase == 2) {
+                _marqueeHoldTicks++;
+                if (_marqueeHoldTicks > 50) { // 停留约 2.5秒
+                    _marqueeLoopCount++;
+                    if (_marqueeLoopCount >= MAX_MARQUEE_LOOPS) {
+                        _marqueePhase = 3; // 结束
+                    } else {
+                        ResetMarqueeState(); // 再来一次
+                    }
+                }
+            }
+            // Phase 3: 结束还原
+            else if (_marqueePhase == 3) {
+                marqueeTimer.Stop();
+                this.Text = _cleanBaseTitle; // 还原纯净标题
+                return;
+            }
+
+            // 更新标题：纯净标题 + 分隔符 + 缓冲区内容
+            string animPart = new string(_marqueeBuffer);
+            this.Text = $"{_cleanBaseTitle}{MARQUEE_SEPARATOR}{animPart}";
         }
     }
 }
