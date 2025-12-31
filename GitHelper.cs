@@ -79,6 +79,24 @@ namespace GitBranchSwitcher {
             RunGit(repoPath, "fetch origin --prune --no-tags", 15000);
         }
         
+        // [新增] 极速 Fetch：只拉取当前分支，速度最快
+        public static void FetchCurrentBranch(string repoPath) {
+            // 1. 获取当前分支名
+            string branch = GetFriendlyBranch(repoPath);
+
+            // 2. 如果处于游离状态(detached)或异常状态，没法指定分支，只能回退到普通 Fetch
+            if (string.IsNullOrEmpty(branch) || branch.Contains("detached") || branch.Contains("unknown") || branch == "HEAD")
+            {
+                FetchFast(repoPath);
+                return;
+            }
+
+            // 3. 针对性 Fetch：git fetch origin <branch_name>
+            // --no-tags: 不拉取 tag
+            // --prune: 清理已删除的分支引用
+            RunGit(repoPath, $"fetch origin \"{branch}\" --prune --no-tags", 15000);
+        }
+        
         public static List<FileChangeItem> GetFileChanges(string repoPath)
         {
             var list = new List<FileChangeItem>();

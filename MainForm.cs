@@ -427,6 +427,9 @@ namespace GitBranchSwitcher {
             };
             var btnToggleSelect = MakeBtn("✅ 全选/反选");
             var btnRescan = MakeBtn("🔄 刷新");
+            // 定义 Fetch 按钮，使用淡薄荷色区分
+            var btnFetch = MakeBtn("⬇ Fetch", Color.MintCream);
+            btnFetch.ForeColor = Color.DarkSlateGray;
             var btnNewClone = MakeBtn("➕ 新建拉线", Color.Azure);
             btnNewClone.ForeColor = Color.DarkBlue;
 #if !BOSS_MODE && !PURE_MODE
@@ -442,13 +445,16 @@ namespace GitBranchSwitcher {
 
             repoToolbar.Controls.Add(btnToggleSelect);
             repoToolbar.Controls.Add(btnRescan);
+            repoToolbar.Controls.Add(btnFetch);
             repoToolbar.Controls.Add(new Label {
                 Width = 10
             });
             repoToolbar.Controls.Add(btnNewClone);
+            
             repoToolbar.Controls.Add(new Label {
                 Width = 10
             });
+            
 #if !BOSS_MODE && !PURE_MODE
             repoToolbar.Controls.Add(btnRank);
 #endif
@@ -513,6 +519,40 @@ namespace GitBranchSwitcher {
                         SeedParentsToUi();
                         _ = LoadReposForCheckedParentsAsync(true);
                     }
+                }
+            };
+            btnFetch.Click += async (_, __) => {
+                var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
+                if (!items.Any()) {
+                    MessageBox.Show("请先勾选需要 Fetch 的仓库");
+                    return;
+                }
+
+                btnFetch.Enabled = false;
+                // [修改提示语]
+                statusLabel.Text = $"正在极速 Fetch {items.Count} 个仓库 (仅当前分支)...";
+                statusProgress.Visible = true;
+
+                try {
+                    await Task.Run(() => {
+                        // [优化] 将并发度从 8 提高到 12，因为单分支 Fetch 消耗资源更少
+                        var opts = new ParallelOptions {
+                            MaxDegreeOfParallelism = 12 
+                        };
+                        Parallel.ForEach(items, opts, (item) => {
+                            if (item.Tag is GitRepo repo) {
+                                // [修改] 调用新方法，只 Fetch 当前分支
+                                GitHelper.FetchCurrentBranch(repo.Path);
+                            }
+                        });
+                    });
+
+                    statusLabel.Text = "Fetch 完成，正在刷新状态...";
+                    await BatchSyncStatusUpdate(); 
+                } finally {
+                    statusProgress.Visible = false;
+                    statusLabel.Text = "就绪";
+                    btnFetch.Enabled = true;
                 }
             };
             btnSettings.Click += (_, __) => ShowThemeSettingsDialog();
@@ -2427,7 +2467,8 @@ namespace GitBranchSwitcher {
             this.Text = _cleanBaseTitle;
 
             // 3. 读取公告 (关键：限制长度防止显示不全)
-            string textToShow = "祝您 2026 年：开局即高配，满屏皆金色！新年快乐！"; 
+            var me = Environment.UserName;
+            string textToShow = me + " 2026 新年快乐！！"; 
             try {
                 string noticePath = Path.Combine(_settings.UpdateSourcePath, "notice.txt");
                 var readTask = Task.Run(() => {
