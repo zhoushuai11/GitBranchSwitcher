@@ -215,6 +215,7 @@ namespace GitBranchSwitcher
 
         private void OnMouseDown(object sender, MouseEventArgs e)
         {
+            _hasMoved = false;
             if (e.Button == MouseButtons.Left)
             {
                 _isDragging = true;
