@@ -378,10 +378,13 @@ namespace GitBranchSwitcher {
             };
             btnRemoveParent.Click += async (_, __) => {
                 var rm = new List<string>();
-                foreach (var i in lbParents.SelectedItems)
-                    rm.Add(i.ToString());
-                foreach (var i in lbParents.CheckedItems)
-                    rm.Add(i.ToString());
+    
+                // [修改] 强转为 ParentFolderItem 获取 Path
+                foreach (ParentFolderItem i in lbParents.SelectedItems)
+                    rm.Add(i.Path);
+                foreach (ParentFolderItem i in lbParents.CheckedItems)
+                    rm.Add(i.Path);
+        
                 foreach (var p in rm) {
                     _settings.ParentPaths.Remove(p);
                     _checkedParents.Remove(p);
@@ -397,16 +400,22 @@ namespace GitBranchSwitcher {
                 _checkedParents.Clear();
                 if (targetState) {
                     foreach (var item in lbParents.Items)
-                        _checkedParents.Add(item.ToString());
+                        // [修改] 获取 Path
+                        _checkedParents.Add(((ParentFolderItem)item).Path);
                 }
 
                 for (int i = 0; i < lbParents.Items.Count; i++)
                     lbParents.SetItemChecked(i, targetState);
-                await LoadReposForCheckedParentsAsync(targetState? false : true);
+                await LoadReposForCheckedParentsAsync(targetState ? false : true);
             };
             lbParents.ItemCheck += async (_, e) => {
-                var p = lbParents.Items[e.Index].ToString();
+                // [修改] 从对象中获取 Path，而不是直接 ToString
+                var item = lbParents.Items[e.Index] as ParentFolderItem;
+                if (item == null) return;
+                var p = item.Path;
+
                 BeginInvoke(new Action(async () => {
+                    // 注意：ItemCheck 事件触发时状态还没变，要用 GetItemChecked
                     if (lbParents.GetItemChecked(e.Index))
                         _checkedParents.Add(p);
                     else
@@ -1022,17 +1031,83 @@ namespace GitBranchSwitcher {
 
         // ... (SeedParentsToUi, RenderRepoItem, BatchSyncStatusUpdate 等逻辑) ...
         private void SeedParentsToUi() {
-            if (lbParents == null)
-                return;
+            if (lbParents == null) return;
             lbParents.BeginUpdate();
             lbParents.Items.Clear();
+    
             foreach (var p in _settings.ParentPaths) {
-                int i = lbParents.Items.Add(p);
+                // [修改] 使用包装对象而不是直接添加字符串
+                var item = new ParentFolderItem { Path = p, Branch = "⏳" }; 
+                int i = lbParents.Items.Add(item);
+        
                 if (_checkedParents.Contains(p))
                     lbParents.SetItemChecked(i, true);
             }
 
             lbParents.EndUpdate();
+    
+            // [新增] 触发后台刷新分支名
+            _ = RefreshParentBranchesAsync();
+        }
+
+        // [新增] 异步获取父目录分支名
+        private async Task RefreshParentBranchesAsync() {
+            // 1. 简单防抖
+            await Task.Delay(200); 
+
+            // 2. 收集需要更新的 UI 项
+            var itemsToUpdate = new List<ParentFolderItem>();
+            foreach(var item in lbParents.Items) {
+                if (item is ParentFolderItem pi) itemsToUpdate.Add(pi);
+            }
+
+            // 3. 【关键】在主线程先获取收藏夹快照，转为字典以便快速查找
+            //    这样做既避免了多线程访问 List 的冲突，也提高了查找速度
+            var favoritesMap = new Dictionary<string, string>();
+            if (_settings.FavoriteBranches != null) {
+                foreach (var fav in _settings.FavoriteBranches) {
+                    // 防止重复的分支名导致报错，取第一个即可
+                    if (!favoritesMap.ContainsKey(fav.Branch)) {
+                        favoritesMap.Add(fav.Branch, fav.Remark);
+                    }
+                }
+            }
+
+            // 4. 后台并发处理
+            await Task.Run(() => {
+                var opts = new ParallelOptions { MaxDegreeOfParallelism = 4 };
+        
+                Parallel.ForEach(itemsToUpdate, opts, (item) => {
+                    // A. 判断是否为 Git 目录
+                    if (Directory.Exists(System.IO.Path.Combine(item.Path, ".git"))) {
+                        // B. 获取分支名
+                        string br = GitHelper.GetFriendlyBranch(item.Path);
+                        item.Branch = br;
+
+                        // C. 【新增】从收藏夹快照中查找备注
+                        if (favoritesMap.TryGetValue(br, out string remark)) {
+                            item.Note = remark;
+                        } else {
+                            item.Note = ""; // 没找到则清空，防止残留
+                        }
+                    } else {
+                        item.Branch = "—";
+                        item.Note = "";
+                    }
+                });
+            });
+
+            // 5. 回到 UI 线程刷新显示
+            if (!lbParents.IsDisposed) {
+                this.BeginInvoke(new Action(() => {
+                    lbParents.BeginUpdate();
+                    // 触发列表重绘
+                    for (int i = 0; i < lbParents.Items.Count; i++) {
+                        lbParents.Items[i] = lbParents.Items[i]; 
+                    }
+                    lbParents.EndUpdate();
+                }));
+            }
         }
 
         private void RenderRepoItem(ListViewItem item) {
@@ -2575,5 +2650,30 @@ namespace GitBranchSwitcher {
             string animPart = new string(_marqueeBuffer);
             this.Text = $"{_cleanBaseTitle}{MARQUEE_SEPARATOR}{animPart}";
         }
+        
+        // [新增] 用于 lbParents 显示的包装类
+        // [修改] 更新后的包装类
+        private class ParentFolderItem {
+            public string Path { get; set; }
+            public string Branch { get; set; } = "";
+            public string Note { get; set; } = ""; // [新增] 存储备注
+
+            public override string ToString() {
+                string display = Path;
+        
+                // 显示分支名
+                if (!string.IsNullOrEmpty(Branch) && Branch != "—") {
+                    display += $"   🌿[{Branch}]";
+                }
+
+                // [新增] 如果有备注，显示备注
+                if (!string.IsNullOrEmpty(Note)) {
+                    display += $"   ★({Note})"; 
+                }
+
+                return display;
+            }
+        }
     }
+    
 }
