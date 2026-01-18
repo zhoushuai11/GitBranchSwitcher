@@ -9,8 +9,8 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.2.5.7</AssemblyVersion>
-        <FileVersion>1.2.5.7</FileVersion>
+        <AssemblyVersion>1.2.7.0</AssemblyVersion>
+        <FileVersion>1.2.7.0</FileVersion>
 
         <IsBetaMode>false</IsBetaMode>
 
@@ -22,10 +22,11 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 增加主题风格，支持自由切换。
+            1. 切线超时时间改为 5min。
+            2. lock 文件修复增加 loading。
         </ReleaseNote>
 
-        <DeployRootPath>H:\GitFleetManagerProjectRoot\GitRankData</DeployRootPath>
+        <DeployRootPath>\\s4.biubiubiu.io\share</DeployRootPath>
     </PropertyGroup>
 
     <ItemGroup>

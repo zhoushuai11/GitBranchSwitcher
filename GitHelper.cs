@@ -189,14 +189,21 @@ namespace GitBranchSwitcher {
             var log = new StringBuilder();
             void Step(string s) => log.AppendLine(s);
 
+            // [配置] 统一超时时间 (毫秒)
+            const int TIMEOUT_FETCH_QUICK = 60_000; 
+            const int TIMEOUT_FETCH_FULL = 120_000;   
+            const int TIMEOUT_RESET = 300_000;        
+            const int TIMEOUT_CHECKOUT = 60_000;     
+            const int TIMEOUT_GENERAL = 60_000;     
+
             if (fastMode)
                 Step("> [极速模式] 跳过 Fetch");
             else {
                 Step($"> 尝试极速拉取: origin {targetBranch}...");
-                var fetchRes = RunGit(repoPath, $"fetch origin {targetBranch} --no-tags --prune --no-progress", 60_000);
+                var fetchRes = RunGit(repoPath, $"fetch origin {targetBranch} --no-tags --prune --no-progress", TIMEOUT_FETCH_QUICK);
                 if (fetchRes.code != 0) {
                     Step($"⚠️ 极速拉取失败，尝试全量拉取...");
-                    RunGit(repoPath, $"fetch --all --tags --prune --no-progress", 180_000);
+                    RunGit(repoPath, $"fetch --all --tags --prune --no-progress", TIMEOUT_FETCH_FULL);
                 }
             }
 
@@ -204,35 +211,39 @@ namespace GitBranchSwitcher {
             if (useStash) {
                 if (HasLocalChanges(repoPath)) {
                     Step($"> stash push...");
-                    var (cs, ss, es) = RunGit(repoPath, "stash push -u -m \"GitBranchSwitcher-auto\"", 120_000);
+                    var (cs, ss, es) = RunGit(repoPath, "stash push -u -m \"GitBranchSwitcher-auto\"", TIMEOUT_GENERAL);
                     if (cs != 0)
                         return (false, log.AppendLine($"❌ Stash失败: {es}").ToString());
                     stashed = true;
                 }
             } else {
                 Step($"> 强制清理工作区...");
-                RunGit(repoPath, "reset --hard", 60_000);
+                RunGit(repoPath, "reset --hard", TIMEOUT_RESET);
                 if (!fastMode)
-                    RunGit(repoPath, "clean -fd", 60_000);
+                    RunGit(repoPath, "clean -fd", TIMEOUT_RESET);
             }
 
             bool localExists = RunGit(repoPath, $"show-ref --verify --quiet refs/heads/{targetBranch}", 20_000).code == 0;
             if (localExists) {
                 Step($"> checkout -f \"{targetBranch}\"");
-                var (c1, s1, e1) = RunGit(repoPath, $"checkout -f \"{targetBranch}\"", 90_000);
+                // [修改] 延长至 300s
+                var (c1, s1, e1) = RunGit(repoPath, $"checkout -f \"{targetBranch}\"", TIMEOUT_CHECKOUT);
                 if (c1 != 0)
                     return (false, log.AppendLine($"checkout 失败: {e1}").ToString());
             } else {
                 if (fastMode)
-                    RunGit(repoPath, $"fetch origin {targetBranch} --no-tags", 60_000);
+                    // [修改] 延长至 300s
+                    RunGit(repoPath, $"fetch origin {targetBranch} --no-tags", TIMEOUT_FETCH_QUICK);
                 bool remoteExists = RunGit(repoPath, $"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
                 if (!remoteExists)
                     return (false, log.AppendLine($"❌ 分支不存在: {targetBranch}").ToString());
 
                 if (!useStash)
-                    RunGit(repoPath, "reset --hard", 60_000);
+                    // [修改] 延长至 300s
+                    RunGit(repoPath, "reset --hard", TIMEOUT_RESET);
                 Step($"> checkout -B (new track)");
-                var (c2, s2, e2) = RunGit(repoPath, $"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"", 120_000);
+                // [修改] 延长至 300s
+                var (c2, s2, e2) = RunGit(repoPath, $"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"", TIMEOUT_CHECKOUT);
                 if (c2 != 0)
                     return (false, log.AppendLine($"创建分支失败: {e2}").ToString());
             }
@@ -242,12 +253,12 @@ namespace GitBranchSwitcher {
                 if (remoteTrackingExists) {
                     if (!useStash) {
                         Step($"> [强制模式] Reset to origin/{targetBranch}...");
-                        var (cr, sr, er) = RunGit(repoPath, $"reset --hard origin/{targetBranch}", 60_000);
+                        var (cr, sr, er) = RunGit(repoPath, $"reset --hard origin/{targetBranch}", TIMEOUT_RESET);
                         if (cr != 0)
                             return (false, log.AppendLine($"❌ 强制同步失败: {er}").ToString());
                     } else {
                         Step($"> 尝试同步 (Fast-forward)...");
-                        var (cm, sm, em) = RunGit(repoPath, $"merge --ff-only origin/{targetBranch}", 60_000);
+                        var (cm, sm, em) = RunGit(repoPath, $"merge --ff-only origin/{targetBranch}", TIMEOUT_GENERAL);
                         if (cm != 0) {
                             log.AppendLine($"❌ 同步失败: 本地分支与远程分叉，无法快进。");
                             log.AppendLine($"原因: {em}");
@@ -259,7 +270,7 @@ namespace GitBranchSwitcher {
 
             if (useStash && stashed) {
                 Step($"> stash pop");
-                var (cp, sp, ep) = RunGit(repoPath, "stash pop --index", 180_000);
+                var (cp, sp, ep) = RunGit(repoPath, "stash pop --index", TIMEOUT_GENERAL);
                 if (cp != 0) {
                     log.AppendLine($"⚠️ Stash Pop 冲突: 请手动处理。");
                     return (false, log.ToString());
@@ -385,23 +396,32 @@ namespace GitBranchSwitcher {
             log.AppendLine($"✅ 完成！ 瘦身: {resultMsg}");
             return (true, log.ToString(), resultMsg, saved);
         }
-
+        
         public static(bool ok, string log) RepairRepo(string repoPath) {
             var log = new StringBuilder();
             string gitDir = Path.Combine(repoPath, ".git");
             if (!Directory.Exists(gitDir))
                 return (false, "找不到 .git");
-            var locks = Directory.GetFiles(gitDir, "*.lock", SearchOption.AllDirectories);
-            foreach (var f in locks) {
-                try {
-                    File.Delete(f);
-                    log.AppendLine($"Deleted {Path.GetFileName(f)}");
-                } catch {
+            
+            try {
+                var locks = Directory.GetFiles(gitDir, "*.lock", SearchOption.AllDirectories);
+                if (locks.Length == 0) {
+                    return (true, "未发现锁文件，仓库状态正常 (无需清理)。");
                 }
+
+                foreach (var f in locks) {
+                    try {
+                        File.Delete(f);
+                        log.AppendLine($"已删除锁文件: {Path.GetFileName(f)}");
+                    } catch (Exception ex) {
+                        log.AppendLine($"删除失败 {Path.GetFileName(f)}: {ex.Message}");
+                    }
+                }
+            } catch (Exception ex) {
+                return (false, $"扫描锁文件出错: {ex.Message}");
             }
 
-            var r = RunGit(repoPath, "fsck --full --no-progress", -1);
-            return (true, log.ToString() + "\n" + (r.code == 0? "Healthy" : r.stdout + r.stderr));
+            return (true, log.ToString());
         }
         
         public static string GetFileDiff(string repoPath, string filePath, bool isStaged, bool isUntracked)

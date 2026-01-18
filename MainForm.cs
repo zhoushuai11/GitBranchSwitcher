@@ -574,12 +574,44 @@ namespace GitBranchSwitcher {
                 if (lvRepos.SelectedItems.Count > 0)
                     Process.Start("explorer.exe", ((GitRepo)lvRepos.SelectedItems[0].Tag).Path);
             });
+            
             listMenu.Items.Add("🛠️ 修复锁文件", null, async (_, __) => {
                 if (lvRepos.SelectedItems.Count == 0)
                     return;
-                var r = (GitRepo)lvRepos.SelectedItems[0].Tag;
-                await Task.Run(() => GitHelper.RepairRepo(r.Path));
-                MessageBox.Show("修复完成");
+
+                this.Enabled = false; 
+                statusLabel.Text = "正在清理 Git 锁文件...";
+                statusProgress.Visible = true;
+
+                try {
+                    var r = (GitRepo)lvRepos.SelectedItems[0].Tag;
+                    
+                    // [关键] 必须使用 await Task.Run 放到后台线程执行
+                    // 配合 GitHelper 的修改，现在应该会瞬间完成
+                    var res = await Task.Run(() => GitHelper.RepairRepo(r.Path));
+                    
+                    if(res.ok) {
+                        // 如果有日志（删除了文件），弹窗提示；如果没有（原本就没锁），轻提示即可
+                        if (!string.IsNullOrWhiteSpace(res.log) && !res.log.Contains("无需清理")) {
+                            MessageBox.Show("清理报告：\n" + res.log, "修复完成");
+                        } else {
+                            // 如果什么都没删，直接在状态栏提示，不弹窗打扰
+                            statusLabel.Text = "仓库正常，无锁文件。";
+                            await Task.Delay(2000); // 停留2秒让用户看到
+                        }
+                    } else {
+                        MessageBox.Show("修复失败: " + res.log, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                } 
+                catch (Exception ex) {
+                    MessageBox.Show("发生异常: " + ex.Message);
+                }
+                finally {
+                    // 恢复界面
+                    if (statusLabel.Text != "仓库正常，无锁文件。") statusLabel.Text = "就绪";
+                    statusProgress.Visible = false;
+                    this.Enabled = true;
+                }
             });
             lvRepos.ContextMenuStrip = listMenu;
 
@@ -1932,12 +1964,17 @@ namespace GitBranchSwitcher {
             if (!items.Any())
                 return;
             var targetRepos = items.Select(i => (GitRepo)i.Tag).ToList();
-
             btnSwitchAll.Enabled = false;
             statusProgress.Visible = true;
-
-            StartFrogTravel();
-
+            statusProgress.Style = ProgressBarStyle.Blocks;
+            statusProgress.Minimum = 0;
+            statusProgress.Maximum = targetRepos.Count;
+            statusProgress.Value = 0;
+// === [新增 1] 创建一个秒表和定时器用于刷新 UI ===
+            var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var uiRefreshTimer = new System.Windows.Forms.Timer { Interval = 1000 }; // 每秒刷新一次
+            
+            // 定义进度处理
             var progressHandler = new Progress<RepoSwitchResult>(result => {
                 var item = items.FirstOrDefault(x => x.Tag == result.Repo);
                 if (item != null) {
@@ -1945,33 +1982,48 @@ namespace GitBranchSwitcher {
                     RenderRepoItem(item);
                     Log($"[{result.Repo.Name}] {result.Message?.Replace("\n", " ")}");
                 }
-
-                statusLabel.Text = $"处理中 {result.ProgressIndex}/{result.TotalCount}";
+                
+                // 更新进度条
+                if (result.ProgressIndex <= statusProgress.Maximum) {
+                    statusProgress.Value = result.ProgressIndex;
+                }
             });
 
-            double totalSeconds = await _workflowService.SwitchReposAsync(targetRepos, target, _settings.StashOnSwitch, _settings.FastMode, progressHandler);
+            // === [新增 2] 定时器每秒更新状态栏文字 ===
+            uiRefreshTimer.Tick += (s, e) => {
+                // 显示格式：处理中 3/10 (已耗时 45s)
+                statusLabel.Text = $"处理中 {statusProgress.Value}/{statusProgress.Maximum} (已耗时 {totalStopwatch.Elapsed.TotalSeconds:F0}s)";
+            };
+            uiRefreshTimer.Start();
+
+            try {
+                // 执行切线
+                double totalSeconds = await _workflowService.SwitchReposAsync(targetRepos, target, _settings.StashOnSwitch, _settings.FastMode, progressHandler);
 
 #if !BOSS_MODE && !PURE_MODE
-            if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                // [修复开始] 计算当前已有的卡片数和分数，并在上传时传入
-                int currentCardCount = _myCollection.Count;
-                int currentScore = _myCollection.Sum(x => x.Score);
-
-                // 原代码是: UploadMyScoreAsync(totalSeconds, 0, null, null);
-                // 修改为传入 currentCardCount 和 currentScore:
-                var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0, currentCardCount, currentScore);
-                UpdateStatsUi(nc, nt, ns);
-                // [修复结束]
-            }
+                if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                    int currentCardCount = _myCollection.Count;
+                    int currentScore = _myCollection.Sum(x => x.Score);
+                    var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0, currentCardCount, currentScore);
+                    UpdateStatsUi(nc, nt, ns);
+                }
 #endif
+                await FinishFrogTravelAndDrawCard(targetRepos.Count);
+                
+                statusLabel.Text = $"完成 (总耗时 {totalSeconds:F1}s)";
+                Log($"🏁 全部完成，总耗时 {totalSeconds:F1}s");
 
-            // [核心修改] 传入本次切线的仓库数量
-            await FinishFrogTravelAndDrawCard(targetRepos.Count);
+            } finally {
+                // === [新增 3] 清理计时器 ===
+                uiRefreshTimer.Stop();
+                uiRefreshTimer.Dispose();
+                totalStopwatch.Stop();
 
-            statusProgress.Visible = false;
-            btnSwitchAll.Enabled = true;
-            statusLabel.Text = "完成";
-            Log("🏁 全部完成");
+                statusProgress.Visible = false;
+                statusProgress.Style = ProgressBarStyle.Marquee; 
+                statusProgress.Value = 0;
+                btnSwitchAll.Enabled = true;
+            }
         }
 
         private void TrySetRuntimeIcon() {
