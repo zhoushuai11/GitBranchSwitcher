@@ -193,7 +193,7 @@ namespace GitBranchSwitcher {
             const int TIMEOUT_FETCH_QUICK = 60_000; 
             const int TIMEOUT_FETCH_FULL = 120_000;   
             const int TIMEOUT_RESET = 300_000;        
-            const int TIMEOUT_CHECKOUT = 60_000;     
+            const int TIMEOUT_CHECKOUT = 300_000;    
             const int TIMEOUT_GENERAL = 60_000;     
 
             if (fastMode)

@@ -439,6 +439,8 @@ namespace GitBranchSwitcher {
             // 定义 Fetch 按钮，使用淡薄荷色区分
             var btnFetch = MakeBtn("⬇ Fetch", Color.MintCream);
             btnFetch.ForeColor = Color.DarkSlateGray;
+            var btnFetchAll = MakeBtn("⬇⬇ Fetch All", Color.Honeydew);
+            btnFetchAll.ForeColor = Color.DarkGreen;
             var btnNewClone = MakeBtn("➕ 新建拉线", Color.Azure);
             btnNewClone.ForeColor = Color.DarkBlue;
 #if !BOSS_MODE && !PURE_MODE
@@ -455,6 +457,7 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnToggleSelect);
             repoToolbar.Controls.Add(btnRescan);
             repoToolbar.Controls.Add(btnFetch);
+            repoToolbar.Controls.Add(btnFetchAll);
             repoToolbar.Controls.Add(new Label {
                 Width = 10
             });
@@ -546,7 +549,7 @@ namespace GitBranchSwitcher {
                     await Task.Run(() => {
                         // [优化] 将并发度从 8 提高到 12，因为单分支 Fetch 消耗资源更少
                         var opts = new ParallelOptions {
-                            MaxDegreeOfParallelism = 12 
+                            MaxDegreeOfParallelism = 12
                         };
                         Parallel.ForEach(items, opts, (item) => {
                             if (item.Tag is GitRepo repo) {
@@ -557,11 +560,42 @@ namespace GitBranchSwitcher {
                     });
 
                     statusLabel.Text = "Fetch 完成，正在刷新状态...";
-                    await BatchSyncStatusUpdate(); 
+                    await BatchSyncStatusUpdate();
                 } finally {
                     statusProgress.Visible = false;
                     statusLabel.Text = "就绪";
                     btnFetch.Enabled = true;
+                }
+            };
+            btnFetchAll.Click += async (_, __) => {
+                var items = lvRepos.Items.Cast<ListViewItem>().ToList();
+                if (!items.Any()) {
+                    MessageBox.Show("没有仓库可 Fetch");
+                    return;
+                }
+
+                btnFetchAll.Enabled = false;
+                statusLabel.Text = $"正在极速 Fetch 所有 {items.Count} 个仓库...";
+                statusProgress.Visible = true;
+
+                try {
+                    await Task.Run(() => {
+                        var opts = new ParallelOptions {
+                            MaxDegreeOfParallelism = 12
+                        };
+                        Parallel.ForEach(items, opts, (item) => {
+                            if (item.Tag is GitRepo repo) {
+                                GitHelper.FetchCurrentBranch(repo.Path);
+                            }
+                        });
+                    });
+
+                    statusLabel.Text = "Fetch All 完成，正在刷新状态...";
+                    await BatchSyncStatusUpdate();
+                } finally {
+                    statusProgress.Visible = false;
+                    statusLabel.Text = "就绪";
+                    btnFetchAll.Enabled = true;
                 }
             };
             btnSettings.Click += (_, __) => ShowThemeSettingsDialog();

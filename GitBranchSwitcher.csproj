@@ -9,8 +9,8 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.2.7.0</AssemblyVersion>
-        <FileVersion>1.2.7.0</FileVersion>
+        <AssemblyVersion>1.2.8.0</AssemblyVersion>
+        <FileVersion>1.2.8.0</FileVersion>
 
         <IsBetaMode>false</IsBetaMode>
 
@@ -23,7 +23,7 @@
 
         <ReleaseNote>
             1. 切线超时时间改为 5min。
-            2. lock 文件修复增加 loading。
+            2. 增加 fetch 功能。
         </ReleaseNote>
 
         <DeployRootPath>\\s4.biubiubiu.io\share</DeployRootPath>
