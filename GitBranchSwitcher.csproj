@@ -9,10 +9,10 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.2.8.0</AssemblyVersion>
-        <FileVersion>1.2.8.0</FileVersion>
+        <AssemblyVersion>1.2.9.0</AssemblyVersion>
+        <FileVersion>1.2.9.0</FileVersion>
 
-        <IsBetaMode>true</IsBetaMode>
+        <IsBetaMode>false</IsBetaMode>
 
         <IsPureMode>false</IsPureMode>
         <IsBossMode>false</IsBossMode>
@@ -22,7 +22,7 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 切线自动修复锁文件
+            1. 切线自动修复锁文件弹窗
             2. 更新界面
         </ReleaseNote>
 
