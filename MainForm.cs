@@ -2014,13 +2014,17 @@ namespace GitBranchSwitcher {
                 if (item != null) {
                     item.Text = (result.Success? "✅" : "❌") + $" {result.DurationSeconds:F1}s";
                     RenderRepoItem(item);
-                    Log($"[{result.Repo.Name}] {result.Message?.Replace("\n", " ")}");
                 }
                 
                 // 更新进度条
                 if (result.ProgressIndex <= statusProgress.Maximum) {
                     statusProgress.Value = result.ProgressIndex;
                 }
+            });
+
+            var liveLogHandler = new Progress<RepoSwitchLogEntry>(entry => {
+                if (!string.IsNullOrWhiteSpace(entry.Message))
+                    Log($"[{entry.Repo.Name}] {entry.Message}");
             });
 
             // === [新增 2] 定时器每秒更新状态栏文字 ===
@@ -2032,7 +2036,13 @@ namespace GitBranchSwitcher {
 
             try {
                 // 执行切线
-                double totalSeconds = await _workflowService.SwitchReposAsync(targetRepos, target, _settings.StashOnSwitch, _settings.FastMode, progressHandler);
+                double totalSeconds = await _workflowService.SwitchReposAsync(
+                    targetRepos,
+                    target,
+                    _settings.StashOnSwitch,
+                    _settings.FastMode,
+                    progressHandler,
+                    liveLogHandler);
 
 #if !BOSS_MODE && !PURE_MODE
                 if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {

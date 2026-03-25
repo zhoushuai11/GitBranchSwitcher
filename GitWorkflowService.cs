@@ -17,6 +17,12 @@ namespace GitBranchSwitcher
         public int TotalCount { get; set; }    // 总数
     }
 
+    public class RepoSwitchLogEntry
+    {
+        public GitRepo Repo { get; set; }
+        public string Message { get; set; }
+    }
+
     public class GitWorkflowService
     {
         private readonly int _maxParallel;
@@ -31,7 +37,8 @@ namespace GitBranchSwitcher
             string targetBranch, 
             bool useStash, 
             bool fastMode, 
-            IProgress<RepoSwitchResult> progress)
+            IProgress<RepoSwitchResult> progress,
+            IProgress<RepoSwitchLogEntry>? logProgress = null)
         {
             using var sem = new SemaphoreSlim(_maxParallel);
             var tasks = new List<Task>();
@@ -50,7 +57,16 @@ namespace GitBranchSwitcher
 
                     try
                     {
-                        var res = GitHelper.SwitchAndPull(repo.Path, targetBranch, useStash, fastMode);
+                        var res = GitHelper.SwitchAndPull(
+                            repo.Path,
+                            targetBranch,
+                            useStash,
+                            fastMode,
+                            line => logProgress?.Report(new RepoSwitchLogEntry
+                            {
+                                Repo = repo,
+                                Message = line
+                            }));
                         ok = res.ok;
                         msg = res.message;
                         // 更新实体状态（注意：这里修改的是引用对象，UI层需注意线程安全或刷新）
@@ -80,6 +96,11 @@ namespace GitBranchSwitcher
                     {
                         ok = false;
                         msg = ex.Message;
+                        logProgress?.Report(new RepoSwitchLogEntry
+                        {
+                            Repo = repo,
+                            Message = ex.Message
+                        });
                     }
                     finally
                     {

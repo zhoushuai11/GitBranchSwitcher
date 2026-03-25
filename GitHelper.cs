@@ -183,11 +183,91 @@ namespace GitBranchSwitcher {
             return code == 0 && !string.IsNullOrWhiteSpace(stdout);
         }
 
+        private static void WriteConsoleLog(string message) {
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
+        }
+
+        private static (int deletedCount, string? error) DeleteGitLockFiles(string repoPath, Action<string>? logger = null) {
+            string gitDir = Path.Combine(repoPath, ".git");
+            if (!Directory.Exists(gitDir))
+                return (0, $"找不到 .git 目录: {gitDir}");
+
+            string[] locks;
+            try {
+                locks = Directory.GetFiles(gitDir, "*.lock", SearchOption.AllDirectories);
+            } catch (Exception ex) {
+                return (0, $"扫描 .lock 文件失败: {ex.Message}");
+            }
+
+            int deletedCount = 0;
+            foreach (var lockFile in locks) {
+                try {
+                    File.Delete(lockFile);
+                    deletedCount++;
+
+                    string relativePath = Path.GetRelativePath(repoPath, lockFile);
+                    string message = $"[LockCleaner] 删除 .lock 文件: {relativePath}";
+                    logger?.Invoke(message);
+                    WriteConsoleLog(message);
+                } catch (Exception ex) {
+                    string message = $"[LockCleaner] 删除失败: {Path.GetFileName(lockFile)} - {ex.Message}";
+                    logger?.Invoke(message);
+                    WriteConsoleLog(message);
+                }
+            }
+
+            return (deletedCount, null);
+        }
+
         // ==================== 2. 核心业务逻辑 ====================
 
-        public static(bool ok, string message) SwitchAndPull(string repoPath, string targetBranch, bool useStash, bool fastMode) {
+        private static bool IsGitLockError(string stdout, string stderr) {
+            string text = $"{stdout}\n{stderr}";
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            return text.Contains(".lock", StringComparison.OrdinalIgnoreCase)
+                   || text.Contains("another git process seems to be running", StringComparison.OrdinalIgnoreCase)
+                   || text.Contains("Unable to create", StringComparison.OrdinalIgnoreCase) && text.Contains("File exists", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static (int code, string stdout, string stderr) RunGitWithLockRecovery(
+            string repoPath,
+            string args,
+            int timeoutMs,
+            Action<string>? logger = null) {
+            var result = RunGit(repoPath, args, timeoutMs);
+            if (result.code == 0 || !IsGitLockError(result.stdout, result.stderr))
+                return result;
+
+            string detectMessage = $"> [LockCleaner] detected lock issue, repo={Path.GetFileName(repoPath)}, cmd=git {args}";
+            logger?.Invoke(detectMessage);
+            WriteConsoleLog(detectMessage);
+
+            var (deletedLockCount, lockCleanupError) = DeleteGitLockFiles(repoPath, logger);
+            if (!string.IsNullOrWhiteSpace(lockCleanupError)) {
+                string errorMessage = $"> [LockCleaner] {lockCleanupError}";
+                logger?.Invoke(errorMessage);
+                WriteConsoleLog(errorMessage);
+                return result;
+            }
+
+            if (deletedLockCount <= 0)
+                return result;
+
+            string retryMessage = $"> [LockCleaner] retry after deleting {deletedLockCount} .lock file(s)";
+            logger?.Invoke(retryMessage);
+            WriteConsoleLog(retryMessage);
+            return RunGit(repoPath, args, timeoutMs);
+        }
+
+        public static(bool ok, string message) SwitchAndPull(string repoPath, string targetBranch, bool useStash, bool fastMode, Action<string>? liveLogger = null) {
             var log = new StringBuilder();
-            void Step(string s) => log.AppendLine(s);
+            void AddLog(string s) {
+                log.AppendLine(s);
+                liveLogger?.Invoke(s);
+            }
+            void Step(string s) => AddLog(s);
 
             // [配置] 统一超时时间 (毫秒)
             const int TIMEOUT_FETCH_QUICK = 60_000; 
@@ -196,14 +276,17 @@ namespace GitBranchSwitcher {
             const int TIMEOUT_CHECKOUT = 300_000;    
             const int TIMEOUT_GENERAL = 60_000;     
 
+            (int code, string stdout, string stderr) RunSwitchGit(string args, int timeoutMs) =>
+                RunGitWithLockRecovery(repoPath, args, timeoutMs, Step);
+
             if (fastMode)
                 Step("> [极速模式] 跳过 Fetch");
             else {
                 Step($"> 尝试极速拉取: origin {targetBranch}...");
-                var fetchRes = RunGit(repoPath, $"fetch origin {targetBranch} --no-tags --prune --no-progress", TIMEOUT_FETCH_QUICK);
+                var fetchRes = RunSwitchGit($"fetch origin {targetBranch} --no-tags --prune --no-progress", TIMEOUT_FETCH_QUICK);
                 if (fetchRes.code != 0) {
                     Step($"⚠️ 极速拉取失败，尝试全量拉取...");
-                    RunGit(repoPath, $"fetch --all --tags --prune --no-progress", TIMEOUT_FETCH_FULL);
+                    RunSwitchGit($"fetch --all --tags --prune --no-progress", TIMEOUT_FETCH_FULL);
                 }
             }
 
@@ -211,57 +294,72 @@ namespace GitBranchSwitcher {
             if (useStash) {
                 if (HasLocalChanges(repoPath)) {
                     Step($"> stash push...");
-                    var (cs, ss, es) = RunGit(repoPath, "stash push -u -m \"GitBranchSwitcher-auto\"", TIMEOUT_GENERAL);
+                    var (cs, ss, es) = RunSwitchGit("stash push -u -m \"GitBranchSwitcher-auto\"", TIMEOUT_GENERAL);
                     if (cs != 0)
-                        return (false, log.AppendLine($"❌ Stash失败: {es}").ToString());
+                    {
+                        AddLog($"❌ Stash失败: {es}");
+                        return (false, log.ToString());
+                    }
                     stashed = true;
                 }
             } else {
                 Step($"> 强制清理工作区...");
-                RunGit(repoPath, "reset --hard", TIMEOUT_RESET);
+                RunSwitchGit("reset --hard", TIMEOUT_RESET);
                 if (!fastMode)
-                    RunGit(repoPath, "clean -fd", TIMEOUT_RESET);
+                    RunSwitchGit("clean -fd", TIMEOUT_RESET);
             }
 
-            bool localExists = RunGit(repoPath, $"show-ref --verify --quiet refs/heads/{targetBranch}", 20_000).code == 0;
+            bool localExists = RunSwitchGit($"show-ref --verify --quiet refs/heads/{targetBranch}", 20_000).code == 0;
             if (localExists) {
                 Step($"> checkout -f \"{targetBranch}\"");
                 // [修改] 延长至 300s
-                var (c1, s1, e1) = RunGit(repoPath, $"checkout -f \"{targetBranch}\"", TIMEOUT_CHECKOUT);
+                var (c1, s1, e1) = RunSwitchGit($"checkout -f \"{targetBranch}\"", TIMEOUT_CHECKOUT);
                 if (c1 != 0)
-                    return (false, log.AppendLine($"checkout 失败: {e1}").ToString());
+                {
+                    AddLog($"checkout 失败: {e1}");
+                    return (false, log.ToString());
+                }
             } else {
                 if (fastMode)
                     // [修改] 延长至 300s
-                    RunGit(repoPath, $"fetch origin {targetBranch} --no-tags", TIMEOUT_FETCH_QUICK);
-                bool remoteExists = RunGit(repoPath, $"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
+                    RunSwitchGit($"fetch origin {targetBranch} --no-tags", TIMEOUT_FETCH_QUICK);
+                bool remoteExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
                 if (!remoteExists)
-                    return (false, log.AppendLine($"❌ 分支不存在: {targetBranch}").ToString());
+                {
+                    AddLog($"❌ 分支不存在: {targetBranch}");
+                    return (false, log.ToString());
+                }
 
                 if (!useStash)
                     // [修改] 延长至 300s
-                    RunGit(repoPath, "reset --hard", TIMEOUT_RESET);
+                    RunSwitchGit("reset --hard", TIMEOUT_RESET);
                 Step($"> checkout -B (new track)");
                 // [修改] 延长至 300s
-                var (c2, s2, e2) = RunGit(repoPath, $"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"", TIMEOUT_CHECKOUT);
+                var (c2, s2, e2) = RunSwitchGit($"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"", TIMEOUT_CHECKOUT);
                 if (c2 != 0)
-                    return (false, log.AppendLine($"创建分支失败: {e2}").ToString());
+                {
+                    AddLog($"创建分支失败: {e2}");
+                    return (false, log.ToString());
+                }
             }
 
             if (!fastMode) {
-                bool remoteTrackingExists = RunGit(repoPath, $"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
+                bool remoteTrackingExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
                 if (remoteTrackingExists) {
                     if (!useStash) {
                         Step($"> [强制模式] Reset to origin/{targetBranch}...");
-                        var (cr, sr, er) = RunGit(repoPath, $"reset --hard origin/{targetBranch}", TIMEOUT_RESET);
+                        var (cr, sr, er) = RunSwitchGit($"reset --hard origin/{targetBranch}", TIMEOUT_RESET);
                         if (cr != 0)
-                            return (false, log.AppendLine($"❌ 强制同步失败: {er}").ToString());
+                        {
+                            AddLog($"❌ 强制同步失败: {er}");
+                            return (false, log.ToString());
+                        }
                     } else {
                         Step($"> 尝试同步 (Fast-forward)...");
-                        var (cm, sm, em) = RunGit(repoPath, $"merge --ff-only origin/{targetBranch}", TIMEOUT_GENERAL);
+                        var (cm, sm, em) = RunSwitchGit($"merge --ff-only origin/{targetBranch}", TIMEOUT_GENERAL);
                         if (cm != 0) {
-                            log.AppendLine($"❌ 同步失败: 本地分支与远程分叉，无法快进。");
-                            log.AppendLine($"原因: {em}");
+                            AddLog($"❌ 同步失败: 本地分支与远程分叉，无法快进。");
+                            AddLog($"原因: {em}");
                             return (false, log.ToString());
                         }
                     }
@@ -270,14 +368,15 @@ namespace GitBranchSwitcher {
 
             if (useStash && stashed) {
                 Step($"> stash pop");
-                var (cp, sp, ep) = RunGit(repoPath, "stash pop --index", TIMEOUT_GENERAL);
+                var (cp, sp, ep) = RunSwitchGit("stash pop --index", TIMEOUT_GENERAL);
                 if (cp != 0) {
-                    log.AppendLine($"⚠️ Stash Pop 冲突: 请手动处理。");
+                    AddLog($"⚠️ Stash Pop 冲突: 请手动处理。");
                     return (false, log.ToString());
                 }
             }
 
-            return (true, log.AppendLine($"OK").ToString());
+            AddLog("OK");
+            return (true, log.ToString());
         }
 
         public static(bool ok, string message) PullCurrentBranch(string repoPath) {
@@ -399,31 +498,17 @@ namespace GitBranchSwitcher {
         
         public static(bool ok, string log) RepairRepo(string repoPath) {
             var log = new StringBuilder();
-            string gitDir = Path.Combine(repoPath, ".git");
-            if (!Directory.Exists(gitDir))
-                return (false, "找不到 .git");
-            
-            try {
-                var locks = Directory.GetFiles(gitDir, "*.lock", SearchOption.AllDirectories);
-                if (locks.Length == 0) {
-                    return (true, "未发现锁文件，仓库状态正常 (无需清理)。");
-                }
+            var (deletedLockCount, error) = DeleteGitLockFiles(repoPath, message => log.AppendLine(message));
+            if (!string.IsNullOrWhiteSpace(error))
+                return (false, error);
 
-                foreach (var f in locks) {
-                    try {
-                        File.Delete(f);
-                        log.AppendLine($"已删除锁文件: {Path.GetFileName(f)}");
-                    } catch (Exception ex) {
-                        log.AppendLine($"删除失败 {Path.GetFileName(f)}: {ex.Message}");
-                    }
-                }
-            } catch (Exception ex) {
-                return (false, $"扫描锁文件出错: {ex.Message}");
-            }
+            if (deletedLockCount == 0)
+                return (true, "未发现锁文件，仓库状态正常 (无需清理)。");
 
             return (true, log.ToString());
         }
         
+
         public static string GetFileDiff(string repoPath, string filePath, bool isStaged, bool isUntracked)
         {
             // 1. 如果是未追踪的新文件 (??)，git diff 没内容，直接读文件原原本本显示
