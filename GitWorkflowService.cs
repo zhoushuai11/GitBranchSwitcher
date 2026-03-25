@@ -23,6 +23,13 @@ namespace GitBranchSwitcher
         public string Message { get; set; }
     }
 
+    public class RepoLockRecoveryRequest
+    {
+        public GitRepo Repo { get; set; }
+        public string Command { get; set; }
+        public string Error { get; set; }
+    }
+
     public class GitWorkflowService
     {
         private readonly int _maxParallel;
@@ -38,7 +45,8 @@ namespace GitBranchSwitcher
             bool useStash, 
             bool fastMode, 
             IProgress<RepoSwitchResult> progress,
-            IProgress<RepoSwitchLogEntry>? logProgress = null)
+            IProgress<RepoSwitchLogEntry>? logProgress = null,
+            Func<RepoLockRecoveryRequest, bool>? confirmLockRecovery = null)
         {
             using var sem = new SemaphoreSlim(_maxParallel);
             var tasks = new List<Task>();
@@ -62,6 +70,12 @@ namespace GitBranchSwitcher
                             targetBranch,
                             useStash,
                             fastMode,
+                            (command, error) => confirmLockRecovery?.Invoke(new RepoLockRecoveryRequest
+                            {
+                                Repo = repo,
+                                Command = command,
+                                Error = error
+                            }) ?? false,
                             line => logProgress?.Report(new RepoSwitchLogEntry
                             {
                                 Repo = repo,

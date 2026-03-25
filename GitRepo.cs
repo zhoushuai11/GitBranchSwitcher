@@ -6,6 +6,10 @@ namespace GitBranchSwitcher {
         public string CurrentBranch { get; set; } = "—";
         public bool SwitchOk { get; set; }
         public string LastMessage { get; set; }
+        public bool IsSwitchQueued { get; set; } = false;
+        public bool IsSwitching { get; set; } = false;
+        public DateTime? SwitchStartedAt { get; set; }
+        public string LiveStatus { get; set; } = "";
 
         // 同步状态缓存
         public int Incoming { get; set; } = 0;

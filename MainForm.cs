@@ -1176,37 +1176,95 @@ namespace GitBranchSwitcher {
             }
         }
 
+        private static string SummarizeSwitchMessage(string message) {
+            if (string.IsNullOrWhiteSpace(message))
+                return "";
+
+            string text = message.Trim();
+            if (text.StartsWith(">"))
+                text = text[1..].Trim();
+
+            if (text.Contains("[LockCleaner]", StringComparison.OrdinalIgnoreCase))
+                return "\u9501\u6587\u4ef6";
+            if (text.StartsWith("stash pop", StringComparison.OrdinalIgnoreCase))
+                return "\u5e94\u7528\u6682\u5b58";
+            if (text.StartsWith("stash push", StringComparison.OrdinalIgnoreCase))
+                return "\u6682\u5b58\u672c\u5730";
+            if (text.StartsWith("checkout", StringComparison.OrdinalIgnoreCase))
+                return "\u5207\u6362\u5206\u652f";
+            if (text.StartsWith("fetch", StringComparison.OrdinalIgnoreCase) || text.Contains("拉取"))
+                return "\u62c9\u53d6\u8fdc\u7a0b";
+            if (text.StartsWith("reset", StringComparison.OrdinalIgnoreCase))
+                return "\u91cd\u7f6e\u4ed3\u5e93";
+            if (text.StartsWith("merge", StringComparison.OrdinalIgnoreCase) || text.Contains("同步"))
+                return "\u540c\u6b65\u5206\u652f";
+            if (text.Equals("OK", StringComparison.OrdinalIgnoreCase))
+                return "\u5b8c\u6210";
+
+            return text.Length > 18 ? text[..18] + "..." : text;
+        }
+
         private void RenderRepoItem(ListViewItem item) {
             if (item == null || item.Tag == null)
                 return;
             var repo = (GitRepo)item.Tag;
             item.SubItems[1].Text = repo.CurrentBranch;
             item.UseItemStyleForSubItems = false;
-            // [修改] 适配深色模式：普通文字颜色跟随列表的前景色，或者手动指定
             Color defaultTextColor = _settings.IsDarkMode ? Color.Gainsboro : Color.Black;
+            item.BackColor = lvRepos.BackColor;
+            item.SubItems[0].ForeColor = defaultTextColor;
+            item.SubItems[0].Font = item.Font;
 
             if (repo.IsDirty)
-                item.SubItems[1].ForeColor = Color.ForestGreen; // 绿色在黑底白底都清楚
+                item.SubItems[1].ForeColor = Color.ForestGreen;
             else
-                item.SubItems[1].ForeColor = defaultTextColor; // [修改] 使用动态颜色
+                item.SubItems[1].ForeColor = defaultTextColor;
+
             string syncText = "";
             Color syncColor = Color.Gray;
             Font syncFont = item.Font;
-            if (repo.IsSyncChecked) {
+
+            if (repo.IsSwitching) {
+                double elapsedSeconds = repo.SwitchStartedAt.HasValue
+                    ? Math.Max(0, (DateTime.Now - repo.SwitchStartedAt.Value).TotalSeconds)
+                    : 0;
+                item.Text = $"\u5207\u7ebf\u4e2d {elapsedSeconds:F0}s";
+                item.SubItems[0].ForeColor = _settings.IsDarkMode ? Color.Gold : Color.DarkOrange;
+                item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
+                item.BackColor = _settings.IsDarkMode ? Color.FromArgb(70, 60, 20) : Color.FromArgb(255, 248, 220);
+                syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u5207\u7ebf\u4e2d" : repo.LiveStatus;
+                syncColor = _settings.IsDarkMode ? Color.Gold : Color.DarkOrange;
+                syncFont = new Font(item.Font, FontStyle.Bold);
+            } else if (repo.IsSwitchQueued) {
+                item.Text = "\u6392\u961f\u4e2d";
+                item.SubItems[0].ForeColor = _settings.IsDarkMode ? Color.LightSkyBlue : Color.SteelBlue;
+                item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
+                item.BackColor = _settings.IsDarkMode ? Color.FromArgb(35, 50, 70) : Color.FromArgb(240, 248, 255);
+                syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u7b49\u5f85" : repo.LiveStatus;
+                syncColor = _settings.IsDarkMode ? Color.LightSkyBlue : Color.SteelBlue;
+                syncFont = new Font(item.Font, FontStyle.Bold);
+            } else if (!repo.SwitchOk && !string.IsNullOrWhiteSpace(repo.LastMessage)) {
+                item.SubItems[0].ForeColor = Color.Crimson;
+                item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
+                item.BackColor = _settings.IsDarkMode ? Color.FromArgb(70, 28, 28) : Color.FromArgb(255, 240, 240);
+                syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u5931\u8d25" : repo.LiveStatus;
+                syncColor = Color.Crimson;
+                syncFont = new Font(item.Font, FontStyle.Bold);
+            } else if (repo.IsSyncChecked) {
                 if (!repo.HasUpstream) {
-                    syncText = "⚠️ 无远程";
+                    syncText = "\u65e0\u8fdc\u7a0b";
                     syncColor = Color.Gray;
                 } else if (repo.Incoming == 0 && repo.Outgoing == 0) {
-                    syncText = "✔ 最新";
+                    syncText = "\u5c31\u7eea";
                     syncColor = defaultTextColor;
                 } else {
                     var sb = new List<string>();
                     bool hasPull = repo.Incoming > 0;
                     bool hasPush = repo.Outgoing > 0;
                     if (hasPull)
-                        sb.Add($"↓ {repo.Incoming}");
+                        sb.Add($"\u2193 {repo.Incoming}");
                     if (hasPush)
-                        sb.Add($"↑ {repo.Outgoing}");
+                        sb.Add($"\u2191 {repo.Outgoing}");
                     syncText = string.Join(" ", sb);
                     if (hasPush && hasPull)
                         syncColor = Color.Red;
@@ -1224,6 +1282,7 @@ namespace GitBranchSwitcher {
             item.SubItems[2].ForeColor = syncColor;
             item.SubItems[2].Font = syncFont;
         }
+
 
         private async Task BatchSyncStatusUpdate() {
             if (lvRepos.Items.Count == 0)
@@ -1659,7 +1718,7 @@ namespace GitBranchSwitcher {
 
         private bool ShowSwitchConfirmDialog(string targetBranch) {
             using var form = new Form {
-                Text = "⚠️ 高危操作确认",
+                Text = "\u26a0\ufe0f \u9ad8\u5371\u64cd\u4f5c\u786e\u8ba4",
                 Width = 450,
                 Height = 280,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -1669,7 +1728,7 @@ namespace GitBranchSwitcher {
                 BackColor = Color.White
             };
             var lblTitle = new Label {
-                Text = "您即将执行一键切线操作，目标分支：",
+                Text = "\u60a8\u5373\u5c06\u6267\u884c\u4e00\u952e\u5207\u7ebf\u64cd\u4f5c\uff0c\u76ee\u6807\u5206\u652f\uff1a",
                 AutoSize = true,
                 Location = new Point(25, 25),
                 Font = new Font("Segoe UI", 10),
@@ -1683,14 +1742,14 @@ namespace GitBranchSwitcher {
                 ForeColor = Color.Crimson
             };
             var lblHint = new Label {
-                Text = "此操作将影响所有选中的仓库，请确认无误。",
+                Text = "\u6b64\u64cd\u4f5c\u5c06\u5f71\u54cd\u6240\u6709\u9009\u4e2d\u7684\u4ed3\u5e93\uff0c\u8bf7\u786e\u8ba4\u65e0\u8bef\u3002",
                 AutoSize = true,
                 Location = new Point(25, 110),
                 Font = new Font("Segoe UI", 9, FontStyle.Italic),
                 ForeColor = Color.Gray
             };
             var btnOk = new Button {
-                Text = "🚀 确认切线",
+                Text = "\ud83d\ude80 \u786e\u8ba4\u5207\u7ebf",
                 DialogResult = DialogResult.OK,
                 Width = 160,
                 Height = 50,
@@ -1703,7 +1762,7 @@ namespace GitBranchSwitcher {
             };
             btnOk.FlatAppearance.BorderSize = 0;
             var btnCancel = new Button {
-                Text = "❌ 取消",
+                Text = "\u274c \u53d6\u6d88",
                 DialogResult = DialogResult.Cancel,
                 Width = 160,
                 Height = 50,
@@ -1721,6 +1780,207 @@ namespace GitBranchSwitcher {
             form.AcceptButton = btnOk;
             form.CancelButton = btnCancel;
             return form.ShowDialog(this) == DialogResult.OK;
+        }
+
+        private bool ConfirmBatchLockRecovery(List<RepoLockRecoveryRequest> requests) {
+            if (InvokeRequired)
+                return (bool)Invoke(new Func<bool>(() => ConfirmBatchLockRecovery(requests)));
+            if (requests == null || requests.Count == 0)
+                return false;
+
+            string repoList = string.Join(Environment.NewLine, requests.Select((r, index) => $"{index + 1}. {r.Repo.Name}"));
+            string errorList = string.Join(
+                Environment.NewLine + Environment.NewLine,
+                requests.Select(r => $"[{r.Repo.Name}]{Environment.NewLine}{(string.IsNullOrWhiteSpace(r.Error) ? "\u672a\u63d0\u4f9b\u9519\u8bef\u4fe1\u606f" : r.Error.Trim())}"));
+
+            using var form = new Form {
+                Text = "\u9501\u6587\u4ef6\u6279\u91cf\u4fee\u590d\u786e\u8ba4",
+                Width = 640,
+                Height = 520,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.White
+            };
+            var lblTitle = new Label {
+                Text = $"\u672c\u6b21\u5207\u7ebf\u6709 {requests.Count} \u4e2a\u4ed3\u5e93\u56e0 .lock \u5931\u8d25\uff0c\u662f\u5426\u4e00\u8d77\u4fee\u590d\u5e76\u91cd\u8bd5\uff1f",
+                AutoSize = true,
+                Location = new Point(25, 25),
+                Font = new Font("Segoe UI", 10),
+                ForeColor = Color.DimGray
+            };
+            var lblCount = new Label {
+                Text = string.Join("\u3001", requests.Select(r => r.Repo.Name)),
+                AutoSize = false,
+                Width = 570,
+                Height = 52,
+                Location = new Point(25, 58),
+                Font = new Font("Segoe UI", 15, FontStyle.Bold),
+                ForeColor = Color.Crimson
+            };
+            var lblRepoList = new Label {
+                Text = "\u5931\u8d25\u4ed3\u5e93",
+                AutoSize = true,
+                Location = new Point(25, 118),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = Color.DimGray
+            };
+            var txtRepos = new TextBox {
+                Location = new Point(25, 142),
+                Width = 250,
+                Height = 210,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.WhiteSmoke,
+                Text = repoList
+            };
+            var lblError = new Label {
+                Text = "\u5931\u8d25\u4fe1\u606f",
+                AutoSize = true,
+                Location = new Point(300, 118),
+                Font = new Font("Segoe UI", 9, FontStyle.Bold),
+                ForeColor = Color.DimGray
+            };
+            var txtError = new TextBox {
+                Location = new Point(300, 142),
+                Width = 295,
+                Height = 210,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.WhiteSmoke,
+                Text = errorList
+            };
+            var lblHint = new Label {
+                Text = "\u786e\u8ba4\u540e\u4f1a\u4f9d\u6b21\u6e05\u7406\u4e0a\u9762\u8fd9\u4e9b\u4ed3\u5e93\u7684 .lock \u6587\u4ef6\uff0c\u7136\u540e\u91cd\u65b0\u6267\u884c\u5207\u7ebf\u3002",
+                AutoSize = false,
+                Width = 570,
+                Height = 40,
+                Location = new Point(25, 365),
+                Font = new Font("Segoe UI", 9, FontStyle.Italic),
+                ForeColor = Color.Gray
+            };
+            var btnOk = new Button {
+                Text = "\ud83d\udd27 \u4e00\u8d77\u4fee\u590d\u5e76\u91cd\u8bd5",
+                DialogResult = DialogResult.OK,
+                Width = 220,
+                Height = 50,
+                Location = new Point(80, 420),
+                BackColor = Color.ForestGreen,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnOk.FlatAppearance.BorderSize = 0;
+            var btnCancel = new Button {
+                Text = "\u274c \u8df3\u8fc7\u672c\u6b21",
+                DialogResult = DialogResult.Cancel,
+                Width = 220,
+                Height = 50,
+                Location = new Point(340, 420),
+                BackColor = Color.IndianRed,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            btnCancel.FlatAppearance.BorderSize = 0;
+            form.Controls.AddRange(new Control[] {
+                lblTitle, lblCount, lblRepoList, txtRepos, lblError, txtError, lblHint, btnOk, btnCancel
+            });
+            form.AcceptButton = btnOk;
+            form.CancelButton = btnCancel;
+            return form.ShowDialog(this) == DialogResult.OK;
+        }
+
+        private async Task HandlePostSwitchLockFailuresAsync(
+            List<GitRepo> targetRepos,
+            List<ListViewItem> items,
+            string target,
+            IProgress<RepoSwitchLogEntry> liveLogHandler) {
+            var lockFailedRepos = targetRepos
+                .Where(r => !r.SwitchOk && GitHelper.ContainsGitLockError(r.LastMessage))
+                .ToList();
+
+            if (lockFailedRepos.Count == 0)
+                return;
+
+            var requests = lockFailedRepos.Select(repo => new RepoLockRecoveryRequest {
+                Repo = repo,
+                Command = "switch",
+                Error = repo.LastMessage ?? ""
+            }).ToList();
+
+            statusLabel.Text = $"\u53d1\u73b0 {lockFailedRepos.Count} \u4e2a\u9501\u6587\u4ef6\u5931\u8d25\u4ed3\u5e93\uff0c\u7b49\u5f85\u5904\u7406";
+            if (!ConfirmBatchLockRecovery(requests)) {
+                Log($"> [LockCleaner] \u8df3\u8fc7\u672c\u6b21 {lockFailedRepos.Count} \u4e2a\u9501\u6587\u4ef6\u5931\u8d25\u4ed3\u5e93");
+                return;
+            }
+
+            Log($"> [LockCleaner] \u5f00\u59cb\u6279\u91cf\u4fee\u590d {lockFailedRepos.Count} \u4e2a\u9501\u6587\u4ef6\u5931\u8d25\u4ed3\u5e93");
+            for (int index = 0; index < lockFailedRepos.Count; index++) {
+                var repo = lockFailedRepos[index];
+                statusLabel.Text = $"\u5904\u7406\u9501\u6587\u4ef6 {index + 1}/{lockFailedRepos.Count} | {repo.Name}";
+                var item = items.FirstOrDefault(x => x.Tag == repo);
+                repo.IsSwitchQueued = false;
+                repo.IsSwitching = true;
+                repo.SwitchStartedAt = DateTime.Now;
+                repo.LiveStatus = "\u4fee\u590d\u9501\u6587\u4ef6";
+                if (item != null)
+                    RenderRepoItem(item);
+
+                liveLogHandler.Report(new RepoSwitchLogEntry {
+                    Repo = repo,
+                    Message = "> [LockCleaner] \u5f00\u59cb\u4fee\u590d\u9501\u6587\u4ef6\u5e76\u91cd\u8bd5"
+                });
+
+                var retryResult = await Task.Run(() => {
+                    var repair = GitHelper.RepairRepo(repo.Path);
+                    if (!repair.ok)
+                        return (ok: false, message: repair.log);
+
+                    return GitHelper.SwitchAndPull(
+                        repo.Path,
+                        target,
+                        _settings.StashOnSwitch,
+                        _settings.FastMode,
+                        null,
+                        line => liveLogHandler.Report(new RepoSwitchLogEntry {
+                            Repo = repo,
+                            Message = line
+                        }));
+                });
+
+                repo.SwitchOk = retryResult.ok;
+                repo.LastMessage = retryResult.message;
+                repo.CurrentBranch = GitHelper.GetFriendlyBranch(repo.Path);
+                var changes = GitHelper.GetFileChanges(repo.Path);
+                repo.IsDirty = changes.Count > 0;
+                var syncResult = GitHelper.GetSyncCounts(repo.Path);
+                repo.IsSyncChecked = true;
+                if (syncResult != null) {
+                    repo.HasUpstream = true;
+                    repo.Incoming = syncResult.Value.behind;
+                    repo.Outgoing = syncResult.Value.ahead;
+                } else {
+                    repo.HasUpstream = false;
+                    repo.Incoming = 0;
+                    repo.Outgoing = 0;
+                }
+
+                repo.IsSwitching = false;
+                repo.SwitchStartedAt = null;
+                repo.LiveStatus = "";
+                if (item != null) {
+                    item.Text = (retryResult.ok ? "\u6210\u529f" : "\u5931\u8d25") + " \u91cd\u8bd5";
+                    RenderRepoItem(item);
+                }
+            }
         }
 
         private void AdjustPbSizeMode(PictureBox pb) {
@@ -1998,41 +2258,64 @@ namespace GitBranchSwitcher {
             if (!items.Any())
                 return;
             var targetRepos = items.Select(i => (GitRepo)i.Tag).ToList();
+            foreach (var item in items) {
+                var repo = (GitRepo)item.Tag;
+                repo.IsSwitchQueued = true;
+                repo.IsSwitching = false;
+                repo.SwitchStartedAt = null;
+                repo.LiveStatus = "\u7b49\u5f85";
+                item.Text = "\u6392\u961f\u4e2d";
+                RenderRepoItem(item);
+            }
             btnSwitchAll.Enabled = false;
             statusProgress.Visible = true;
             statusProgress.Style = ProgressBarStyle.Blocks;
             statusProgress.Minimum = 0;
             statusProgress.Maximum = targetRepos.Count;
             statusProgress.Value = 0;
-// === [新增 1] 创建一个秒表和定时器用于刷新 UI ===
             var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var uiRefreshTimer = new System.Windows.Forms.Timer { Interval = 1000 }; // 每秒刷新一次
-            
-            // 定义进度处理
+            var uiRefreshTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+
             var progressHandler = new Progress<RepoSwitchResult>(result => {
                 var item = items.FirstOrDefault(x => x.Tag == result.Repo);
                 if (item != null) {
-                    item.Text = (result.Success? "✅" : "❌") + $" {result.DurationSeconds:F1}s";
+                    result.Repo.IsSwitchQueued = false;
+                    result.Repo.IsSwitching = false;
+                    result.Repo.SwitchStartedAt = null;
+                    result.Repo.LiveStatus = "";
+                    item.Text = (result.Success ? "\u6210\u529f" : "\u5931\u8d25") + $" {result.DurationSeconds:F1}s";
                     RenderRepoItem(item);
                 }
-                
-                // 更新进度条
-                if (result.ProgressIndex <= statusProgress.Maximum) {
+
+                if (result.ProgressIndex <= statusProgress.Maximum)
                     statusProgress.Value = result.ProgressIndex;
-                }
             });
 
             var liveLogHandler = new Progress<RepoSwitchLogEntry>(entry => {
-                if (!string.IsNullOrWhiteSpace(entry.Message))
+                if (!string.IsNullOrWhiteSpace(entry.Message)) {
+                    entry.Repo.IsSwitchQueued = false;
+                    entry.Repo.IsSwitching = true;
+                    entry.Repo.SwitchStartedAt ??= DateTime.Now;
+                    entry.Repo.LiveStatus = SummarizeSwitchMessage(entry.Message);
+                    var item = items.FirstOrDefault(x => x.Tag == entry.Repo);
+                    if (item != null)
+                        RenderRepoItem(item);
                     Log($"[{entry.Repo.Name}] {entry.Message}");
+                }
             });
 
-            // === [新增 2] 定时器每秒更新状态栏文字 ===
             uiRefreshTimer.Tick += (s, e) => {
-                // 显示格式：处理中 3/10 (已耗时 45s)
-                statusLabel.Text = $"处理中 {statusProgress.Value}/{statusProgress.Maximum} (已耗时 {totalStopwatch.Elapsed.TotalSeconds:F0}s)";
+                int runningCount = targetRepos.Count(r => r.IsSwitching);
+                int queuedCount = targetRepos.Count(r => r.IsSwitchQueued);
+                statusLabel.Text = $"\u5207\u7ebf\u4e2d {statusProgress.Value}/{statusProgress.Maximum} | \u8fd0\u884c {runningCount} | \u6392\u961f {queuedCount} | {totalStopwatch.Elapsed.TotalSeconds:F0}s";
+                foreach (var item in items.Where(x => {
+                             var repo = (GitRepo)x.Tag;
+                             return repo.IsSwitching || repo.IsSwitchQueued;
+                         }))
+                    RenderRepoItem(item);
             };
             uiRefreshTimer.Start();
+
 
             try {
                 // 执行切线
@@ -2042,7 +2325,11 @@ namespace GitBranchSwitcher {
                     _settings.StashOnSwitch,
                     _settings.FastMode,
                     progressHandler,
-                    liveLogHandler);
+                    liveLogHandler,
+                    null);
+
+                await HandlePostSwitchLockFailuresAsync(targetRepos, items, target, liveLogHandler);
+                totalSeconds = totalStopwatch.Elapsed.TotalSeconds;
 
 #if !BOSS_MODE && !PURE_MODE
                 if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {

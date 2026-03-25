@@ -221,8 +221,7 @@ namespace GitBranchSwitcher {
 
         // ==================== 2. 核心业务逻辑 ====================
 
-        private static bool IsGitLockError(string stdout, string stderr) {
-            string text = $"{stdout}\n{stderr}";
+        public static bool ContainsGitLockError(string? text) {
             if (string.IsNullOrWhiteSpace(text))
                 return false;
 
@@ -231,18 +230,34 @@ namespace GitBranchSwitcher {
                    || text.Contains("Unable to create", StringComparison.OrdinalIgnoreCase) && text.Contains("File exists", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static bool IsGitLockError(string stdout, string stderr) {
+            string text = $"{stdout}\n{stderr}";
+            return ContainsGitLockError(text);
+        }
+
         private static (int code, string stdout, string stderr) RunGitWithLockRecovery(
             string repoPath,
             string args,
             int timeoutMs,
+            Func<string, string, bool>? confirmLockRecovery = null,
             Action<string>? logger = null) {
             var result = RunGit(repoPath, args, timeoutMs);
             if (result.code == 0 || !IsGitLockError(result.stdout, result.stderr))
                 return result;
 
-            string detectMessage = $"> [LockCleaner] detected lock issue, repo={Path.GetFileName(repoPath)}, cmd=git {args}";
+            string detectMessage = $"> [LockCleaner] \u68c0\u6d4b\u5230\u9501\u6587\u4ef6\u95ee\u9898, repo={Path.GetFileName(repoPath)}, cmd=git {args}";
             logger?.Invoke(detectMessage);
             WriteConsoleLog(detectMessage);
+
+            if (confirmLockRecovery == null)
+                return result;
+
+            if (!confirmLockRecovery(args, string.IsNullOrWhiteSpace(result.stderr) ? result.stdout : result.stderr)) {
+                string skipMessage = $"> [LockCleaner] \u7528\u6237\u53d6\u6d88\u4e86\u9501\u6587\u4ef6\u4fee\u590d";
+                logger?.Invoke(skipMessage);
+                WriteConsoleLog(skipMessage);
+                return result;
+            }
 
             var (deletedLockCount, lockCleanupError) = DeleteGitLockFiles(repoPath, logger);
             if (!string.IsNullOrWhiteSpace(lockCleanupError)) {
@@ -255,13 +270,19 @@ namespace GitBranchSwitcher {
             if (deletedLockCount <= 0)
                 return result;
 
-            string retryMessage = $"> [LockCleaner] retry after deleting {deletedLockCount} .lock file(s)";
+            string retryMessage = $"> [LockCleaner] \u5df2\u5220\u9664 {deletedLockCount} \u4e2a .lock \u6587\u4ef6\uff0c\u91cd\u8bd5\u5f53\u524d\u6b65\u9aa4";
             logger?.Invoke(retryMessage);
             WriteConsoleLog(retryMessage);
             return RunGit(repoPath, args, timeoutMs);
         }
 
-        public static(bool ok, string message) SwitchAndPull(string repoPath, string targetBranch, bool useStash, bool fastMode, Action<string>? liveLogger = null) {
+        public static(bool ok, string message) SwitchAndPull(
+            string repoPath,
+            string targetBranch,
+            bool useStash,
+            bool fastMode,
+            Func<string, string, bool>? confirmLockRecovery = null,
+            Action<string>? liveLogger = null) {
             var log = new StringBuilder();
             void AddLog(string s) {
                 log.AppendLine(s);
@@ -277,7 +298,7 @@ namespace GitBranchSwitcher {
             const int TIMEOUT_GENERAL = 60_000;     
 
             (int code, string stdout, string stderr) RunSwitchGit(string args, int timeoutMs) =>
-                RunGitWithLockRecovery(repoPath, args, timeoutMs, Step);
+                RunGitWithLockRecovery(repoPath, args, timeoutMs, confirmLockRecovery, Step);
 
             if (fastMode)
                 Step("> [极速模式] 跳过 Fetch");
