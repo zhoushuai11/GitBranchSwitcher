@@ -1949,6 +1949,8 @@ namespace GitBranchSwitcher {
                         target,
                         _settings.StashOnSwitch,
                         _settings.FastMode,
+                        _settings.EnableGitOperationTimeout,
+                        _settings.GitOperationTimeoutSeconds,
                         null,
                         line => liveLogHandler.Report(new RepoSwitchLogEntry {
                             Repo = repo,
@@ -2324,6 +2326,8 @@ namespace GitBranchSwitcher {
                     target,
                     _settings.StashOnSwitch,
                     _settings.FastMode,
+                    _settings.EnableGitOperationTimeout,
+                    _settings.GitOperationTimeoutSeconds,
                     progressHandler,
                     liveLogHandler,
                     null);
@@ -2610,7 +2614,7 @@ namespace GitBranchSwitcher {
             using var form = new Form {
                 Text = "界面设置",
                 Width = 450, // 稍微加宽以容纳长文件名
-                Height = 350,
+                Height = 470,
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -2715,9 +2719,46 @@ namespace GitBranchSwitcher {
                 Cursor = Cursors.Hand
             };
 
+            var chkEnableTimeout = new CheckBox {
+                Text = "启用 Git 操作超时限制",
+                Top = 235,
+                Left = 20,
+                Width = 390,
+                Font = new Font("Segoe UI", 10),
+                Checked = _settings.EnableGitOperationTimeout,
+                Cursor = Cursors.Hand
+            };
+
+            var lblTimeoutSeconds = new Label {
+                Text = "默认超时时间(秒):",
+                Top = 270,
+                Left = 20,
+                AutoSize = true,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold)
+            };
+
+            var numTimeoutSeconds = new NumericUpDown {
+                Top = 298,
+                Left = 20,
+                Width = 390,
+                Minimum = 1,
+                Maximum = 3600,
+                Value = Math.Max(1, _settings.GitOperationTimeoutSeconds),
+                Font = new Font("Segoe UI", 10),
+                BackColor = _settings.IsDarkMode ? Color.FromArgb(45, 45, 48) : Color.White,
+                ForeColor = _settings.IsDarkMode ? Color.Gainsboro : Color.Black
+            };
+
+            void UpdateTimeoutInputState() {
+                bool enabled = chkEnableTimeout.Checked;
+                lblTimeoutSeconds.Enabled = enabled;
+                numTimeoutSeconds.Enabled = enabled;
+            }
+            chkEnableTimeout.CheckedChanged += (_, __) => UpdateTimeoutInputState();
+
             var btnOk = new Button {
                 Text = "💾 保存并应用",
-                Top = 240,
+                Top = 350,
                 Left = 20,
                 Width = 390,
                 Height = 40,
@@ -2730,7 +2771,7 @@ namespace GitBranchSwitcher {
             btnOk.FlatAppearance.BorderSize = 0;
 
             form.Controls.AddRange(new Control[] {
-                lblTheme, cmbThemes, lblColl, cmbCollection, chkDarkMode, btnOk
+                lblTheme, cmbThemes, lblColl, cmbCollection, chkDarkMode, chkEnableTimeout, lblTimeoutSeconds, numTimeoutSeconds, btnOk
             });
             form.AcceptButton = btnOk;
 
@@ -2739,10 +2780,12 @@ namespace GitBranchSwitcher {
             bool showColl = cmbThemes.SelectedItem?.ToString() == THEME_COLLECTION;
             lblColl.Visible = showColl;
             cmbCollection.Visible = showColl;
+            UpdateTimeoutInputState();
 
             // === 保存逻辑 ===
             if (form.ShowDialog(this) == DialogResult.OK) {
                 bool needApply = false;
+                bool settingsChanged = false;
 
                 // 1. 保存主题
                 string newTheme = cmbThemes.SelectedItem?.ToString();
@@ -2752,6 +2795,7 @@ namespace GitBranchSwitcher {
                 if (newTheme != _settings.SelectedTheme) {
                     _settings.SelectedTheme = newTheme;
                     needApply = true;
+                    settingsChanged = true;
                 }
 
                 // 2. 保存收藏品设置
@@ -2768,6 +2812,7 @@ namespace GitBranchSwitcher {
                     }
 
                     needApply = true; // 即使主题没变，换了图片也要刷新
+                    settingsChanged = true;
                 }
 
                 // 3. 保存深色模式
@@ -2775,12 +2820,29 @@ namespace GitBranchSwitcher {
                     _settings.IsDarkMode = chkDarkMode.Checked;
                     ApplyThemeColors();
                     needApply = true;
+                    settingsChanged = true;
+                }
+
+                bool newEnableTimeout = chkEnableTimeout.Checked;
+                int newTimeoutSeconds = Decimal.ToInt32(numTimeoutSeconds.Value);
+                if (newEnableTimeout != _settings.EnableGitOperationTimeout) {
+                    _settings.EnableGitOperationTimeout = newEnableTimeout;
+                    settingsChanged = true;
+                }
+                if (newTimeoutSeconds != _settings.GitOperationTimeoutSeconds) {
+                    _settings.GitOperationTimeoutSeconds = newTimeoutSeconds;
+                    settingsChanged = true;
+                }
+
+                if (settingsChanged) {
+                    _settings.Save();
                 }
 
                 if (needApply) {
-                    _settings.Save();
                     UpdateThemeLabel(); // 更新状态栏文字
                     LoadRandomFrameWorkImage(); // 立即刷新图片
+                    MessageBox.Show("设置已保存！");
+                } else if (settingsChanged) {
                     MessageBox.Show("设置已保存！");
                 }
             }

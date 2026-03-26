@@ -20,6 +20,8 @@ namespace GitBranchSwitcher {
         public bool FastMode { get; set; } = false;
         public bool ConfirmOnSwitch { get; set; } = false;
         public int MaxParallel { get; set; } = 16;
+        public bool EnableGitOperationTimeout { get; set; } = false;
+        public int GitOperationTimeoutSeconds { get; set; } = 300;
 
         public List<string> ParentPaths { get; set; } = new List<string>();
         public List<ParentRepoCache> RepositoryCache { get; set; } = new List<ParentRepoCache>();
@@ -61,6 +63,8 @@ namespace GitBranchSwitcher {
 
             if (s.MaxParallel < 16)
                 s.MaxParallel = 16;
+            if (s.GitOperationTimeoutSeconds <= 0)
+                s.GitOperationTimeoutSeconds = 300;
 
             // [核心修改] 强制使用新路径，忽略缓存文件中的旧路径
             // 无论之前 settings.json 里存了什么旧的 \\SS-ZHOUSHUAI 路径，这里都会被覆盖

@@ -44,6 +44,8 @@ namespace GitBranchSwitcher
             string targetBranch, 
             bool useStash, 
             bool fastMode, 
+            bool enableOperationTimeout,
+            int operationTimeoutSeconds,
             IProgress<RepoSwitchResult> progress,
             IProgress<RepoSwitchLogEntry>? logProgress = null,
             Func<RepoLockRecoveryRequest, bool>? confirmLockRecovery = null)
@@ -70,6 +72,8 @@ namespace GitBranchSwitcher
                             targetBranch,
                             useStash,
                             fastMode,
+                            enableOperationTimeout,
+                            operationTimeoutSeconds,
                             (command, error) => confirmLockRecovery?.Invoke(new RepoLockRecoveryRequest
                             {
                                 Repo = repo,

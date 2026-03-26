@@ -178,8 +178,8 @@ namespace GitBranchSwitcher {
             return (0, 0);
         }
 
-        private static bool HasLocalChanges(string repoPath) {
-            var (code, stdout, _) = RunGit(repoPath, "status --porcelain", 15000);
+        private static bool HasLocalChanges(string repoPath, int timeoutMs = 15000) {
+            var (code, stdout, _) = RunGit(repoPath, "status --porcelain", timeoutMs);
             return code == 0 && !string.IsNullOrWhiteSpace(stdout);
         }
 
@@ -281,6 +281,8 @@ namespace GitBranchSwitcher {
             string targetBranch,
             bool useStash,
             bool fastMode,
+            bool enableOperationTimeout,
+            int operationTimeoutSeconds,
             Func<string, string, bool>? confirmLockRecovery = null,
             Action<string>? liveLogger = null) {
             var log = new StringBuilder();
@@ -290,12 +292,10 @@ namespace GitBranchSwitcher {
             }
             void Step(string s) => AddLog(s);
 
-            // [配置] 统一超时时间 (毫秒)
-            const int TIMEOUT_FETCH_QUICK = 60_000; 
-            const int TIMEOUT_FETCH_FULL = 120_000;   
-            const int TIMEOUT_RESET = 300_000;        
-            const int TIMEOUT_CHECKOUT = 300_000;    
-            const int TIMEOUT_GENERAL = 60_000;     
+            int configuredTimeoutMs = enableOperationTimeout
+                ? Math.Max(1, operationTimeoutSeconds) * 1000
+                : -1;
+            int ResolveTimeout() => enableOperationTimeout ? configuredTimeoutMs : -1;
 
             (int code, string stdout, string stderr) RunSwitchGit(string args, int timeoutMs) =>
                 RunGitWithLockRecovery(repoPath, args, timeoutMs, confirmLockRecovery, Step);
@@ -304,18 +304,18 @@ namespace GitBranchSwitcher {
                 Step("> [极速模式] 跳过 Fetch");
             else {
                 Step($"> 尝试极速拉取: origin {targetBranch}...");
-                var fetchRes = RunSwitchGit($"fetch origin {targetBranch} --no-tags --prune --no-progress", TIMEOUT_FETCH_QUICK);
+                var fetchRes = RunSwitchGit($"fetch origin {targetBranch} --no-tags --prune --no-progress", ResolveTimeout());
                 if (fetchRes.code != 0) {
                     Step($"⚠️ 极速拉取失败，尝试全量拉取...");
-                    RunSwitchGit($"fetch --all --tags --prune --no-progress", TIMEOUT_FETCH_FULL);
+                    RunSwitchGit($"fetch --all --tags --prune --no-progress", ResolveTimeout());
                 }
             }
 
             bool stashed = false;
             if (useStash) {
-                if (HasLocalChanges(repoPath)) {
+                if (HasLocalChanges(repoPath, ResolveTimeout())) {
                     Step($"> stash push...");
-                    var (cs, ss, es) = RunSwitchGit("stash push -u -m \"GitBranchSwitcher-auto\"", TIMEOUT_GENERAL);
+                    var (cs, ss, es) = RunSwitchGit("stash push -u -m \"GitBranchSwitcher-auto\"", ResolveTimeout());
                     if (cs != 0)
                     {
                         AddLog($"❌ Stash失败: {es}");
@@ -325,16 +325,15 @@ namespace GitBranchSwitcher {
                 }
             } else {
                 Step($"> 强制清理工作区...");
-                RunSwitchGit("reset --hard", TIMEOUT_RESET);
+                RunSwitchGit("reset --hard", ResolveTimeout());
                 if (!fastMode)
-                    RunSwitchGit("clean -fd", TIMEOUT_RESET);
+                    RunSwitchGit("clean -fd", ResolveTimeout());
             }
 
-            bool localExists = RunSwitchGit($"show-ref --verify --quiet refs/heads/{targetBranch}", 20_000).code == 0;
+            bool localExists = RunSwitchGit($"show-ref --verify --quiet refs/heads/{targetBranch}", ResolveTimeout()).code == 0;
             if (localExists) {
                 Step($"> checkout -f \"{targetBranch}\"");
-                // [修改] 延长至 300s
-                var (c1, s1, e1) = RunSwitchGit($"checkout -f \"{targetBranch}\"", TIMEOUT_CHECKOUT);
+                var (c1, s1, e1) = RunSwitchGit($"checkout -f \"{targetBranch}\"", ResolveTimeout());
                 if (c1 != 0)
                 {
                     AddLog($"checkout 失败: {e1}");
@@ -342,9 +341,8 @@ namespace GitBranchSwitcher {
                 }
             } else {
                 if (fastMode)
-                    // [修改] 延长至 300s
-                    RunSwitchGit($"fetch origin {targetBranch} --no-tags", TIMEOUT_FETCH_QUICK);
-                bool remoteExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
+                    RunSwitchGit($"fetch origin {targetBranch} --no-tags", ResolveTimeout());
+                bool remoteExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", ResolveTimeout()).code == 0;
                 if (!remoteExists)
                 {
                     AddLog($"❌ 分支不存在: {targetBranch}");
@@ -352,11 +350,9 @@ namespace GitBranchSwitcher {
                 }
 
                 if (!useStash)
-                    // [修改] 延长至 300s
-                    RunSwitchGit("reset --hard", TIMEOUT_RESET);
+                    RunSwitchGit("reset --hard", ResolveTimeout());
                 Step($"> checkout -B (new track)");
-                // [修改] 延长至 300s
-                var (c2, s2, e2) = RunSwitchGit($"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"", TIMEOUT_CHECKOUT);
+                var (c2, s2, e2) = RunSwitchGit($"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"", ResolveTimeout());
                 if (c2 != 0)
                 {
                     AddLog($"创建分支失败: {e2}");
@@ -365,11 +361,11 @@ namespace GitBranchSwitcher {
             }
 
             if (!fastMode) {
-                bool remoteTrackingExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", 20_000).code == 0;
+                bool remoteTrackingExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", ResolveTimeout()).code == 0;
                 if (remoteTrackingExists) {
                     if (!useStash) {
                         Step($"> [强制模式] Reset to origin/{targetBranch}...");
-                        var (cr, sr, er) = RunSwitchGit($"reset --hard origin/{targetBranch}", TIMEOUT_RESET);
+                        var (cr, sr, er) = RunSwitchGit($"reset --hard origin/{targetBranch}", ResolveTimeout());
                         if (cr != 0)
                         {
                             AddLog($"❌ 强制同步失败: {er}");
@@ -377,7 +373,7 @@ namespace GitBranchSwitcher {
                         }
                     } else {
                         Step($"> 尝试同步 (Fast-forward)...");
-                        var (cm, sm, em) = RunSwitchGit($"merge --ff-only origin/{targetBranch}", TIMEOUT_GENERAL);
+                        var (cm, sm, em) = RunSwitchGit($"merge --ff-only origin/{targetBranch}", ResolveTimeout());
                         if (cm != 0) {
                             AddLog($"❌ 同步失败: 本地分支与远程分叉，无法快进。");
                             AddLog($"原因: {em}");
@@ -389,7 +385,7 @@ namespace GitBranchSwitcher {
 
             if (useStash && stashed) {
                 Step($"> stash pop");
-                var (cp, sp, ep) = RunSwitchGit("stash pop --index", TIMEOUT_GENERAL);
+                var (cp, sp, ep) = RunSwitchGit("stash pop --index", ResolveTimeout());
                 if (cp != 0) {
                     AddLog($"⚠️ Stash Pop 冲突: 请手动处理。");
                     return (false, log.ToString());
