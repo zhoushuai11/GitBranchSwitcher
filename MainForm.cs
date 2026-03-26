@@ -201,7 +201,6 @@ namespace GitBranchSwitcher {
             _ = InitMyStatsAsync();
 #endif
             UpdateThemeLabel();
-            ApplyThemeColors();
             SetSwitchState(SwitchState.NotStarted);
             SeedParentsToUi();
 
@@ -286,7 +285,7 @@ namespace GitBranchSwitcher {
             }
 
             statusTheme.Text = $"🎨 主题: {display}";
-            statusTheme.ForeColor = _settings.IsDarkMode ? Color.Gray : Color.DimGray;
+            statusTheme.ForeColor = Color.DimGray;
         }
 
         private Button MakeBtn(string text, Color? backColor = null) {
@@ -1210,7 +1209,7 @@ namespace GitBranchSwitcher {
             var repo = (GitRepo)item.Tag;
             item.SubItems[1].Text = repo.CurrentBranch;
             item.UseItemStyleForSubItems = false;
-            Color defaultTextColor = _settings.IsDarkMode ? Color.Gainsboro : Color.Black;
+            Color defaultTextColor = Color.Black;
             item.BackColor = lvRepos.BackColor;
             item.SubItems[0].ForeColor = defaultTextColor;
             item.SubItems[0].Font = item.Font;
@@ -1229,24 +1228,24 @@ namespace GitBranchSwitcher {
                     ? Math.Max(0, (DateTime.Now - repo.SwitchStartedAt.Value).TotalSeconds)
                     : 0;
                 item.Text = $"\u5207\u7ebf\u4e2d {elapsedSeconds:F0}s";
-                item.SubItems[0].ForeColor = _settings.IsDarkMode ? Color.Gold : Color.DarkOrange;
+                item.SubItems[0].ForeColor = Color.DarkOrange;
                 item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = _settings.IsDarkMode ? Color.FromArgb(70, 60, 20) : Color.FromArgb(255, 248, 220);
+                item.BackColor = Color.FromArgb(255, 248, 220);
                 syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u5207\u7ebf\u4e2d" : repo.LiveStatus;
-                syncColor = _settings.IsDarkMode ? Color.Gold : Color.DarkOrange;
+                syncColor = Color.DarkOrange;
                 syncFont = new Font(item.Font, FontStyle.Bold);
             } else if (repo.IsSwitchQueued) {
                 item.Text = "\u6392\u961f\u4e2d";
-                item.SubItems[0].ForeColor = _settings.IsDarkMode ? Color.LightSkyBlue : Color.SteelBlue;
+                item.SubItems[0].ForeColor = Color.SteelBlue;
                 item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = _settings.IsDarkMode ? Color.FromArgb(35, 50, 70) : Color.FromArgb(240, 248, 255);
+                item.BackColor = Color.FromArgb(240, 248, 255);
                 syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u7b49\u5f85" : repo.LiveStatus;
-                syncColor = _settings.IsDarkMode ? Color.LightSkyBlue : Color.SteelBlue;
+                syncColor = Color.SteelBlue;
                 syncFont = new Font(item.Font, FontStyle.Bold);
             } else if (!repo.SwitchOk && !string.IsNullOrWhiteSpace(repo.LastMessage)) {
                 item.SubItems[0].ForeColor = Color.Crimson;
                 item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = _settings.IsDarkMode ? Color.FromArgb(70, 28, 28) : Color.FromArgb(255, 240, 240);
+                item.BackColor = Color.FromArgb(255, 240, 240);
                 syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u5931\u8d25" : repo.LiveStatus;
                 syncColor = Color.Crimson;
                 syncFont = new Font(item.Font, FontStyle.Bold);
@@ -2333,6 +2332,7 @@ namespace GitBranchSwitcher {
                     null);
 
                 await HandlePostSwitchLockFailuresAsync(targetRepos, items, target, liveLogHandler);
+                await RefreshParentBranchesAsync();
                 totalSeconds = totalStopwatch.Elapsed.TotalSeconds;
 
 #if !BOSS_MODE && !PURE_MODE
@@ -2614,13 +2614,11 @@ namespace GitBranchSwitcher {
             using var form = new Form {
                 Text = "界面设置",
                 Width = 450, // 稍微加宽以容纳长文件名
-                Height = 470,
+                Height = 400,
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
-                MinimizeBox = false,
-                BackColor = _settings.IsDarkMode? Color.FromArgb(32, 32, 32) : Color.WhiteSmoke,
-                ForeColor = _settings.IsDarkMode? Color.Gainsboro : Color.Black
+                MinimizeBox = false
             };
 
             // === UI 控件 ===
@@ -2637,9 +2635,7 @@ namespace GitBranchSwitcher {
                 Left = 20,
                 Width = 390,
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 10),
-                BackColor = _settings.IsDarkMode? Color.FromArgb(45, 45, 48) : Color.White,
-                ForeColor = _settings.IsDarkMode? Color.Gainsboro : Color.Black
+                Font = new Font("Segoe UI", 10)
             };
             cmbThemes.Items.AddRange(themeList.ToArray());
 
@@ -2659,8 +2655,6 @@ namespace GitBranchSwitcher {
                 Width = 390,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Font = new Font("Segoe UI", 10),
-                BackColor = _settings.IsDarkMode? Color.FromArgb(45, 45, 48) : Color.White,
-                ForeColor = _settings.IsDarkMode? Color.Gainsboro : Color.Black,
                 Visible = false
             };
 
@@ -2709,19 +2703,9 @@ namespace GitBranchSwitcher {
             }
 
             // === 其他控件 ===
-            var chkDarkMode = new CheckBox {
-                Text = "🌙 开启深色模式 (Dark Mode)",
-                Top = 200,
-                Left = 20,
-                Width = 390, // 位置稍微下移
-                Font = new Font("Segoe UI", 10),
-                Checked = _settings.IsDarkMode,
-                Cursor = Cursors.Hand
-            };
-
             var chkEnableTimeout = new CheckBox {
                 Text = "启用 Git 操作超时限制",
-                Top = 235,
+                Top = 200,
                 Left = 20,
                 Width = 390,
                 Font = new Font("Segoe UI", 10),
@@ -2731,22 +2715,20 @@ namespace GitBranchSwitcher {
 
             var lblTimeoutSeconds = new Label {
                 Text = "默认超时时间(秒):",
-                Top = 270,
+                Top = 235,
                 Left = 20,
                 AutoSize = true,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
 
             var numTimeoutSeconds = new NumericUpDown {
-                Top = 298,
+                Top = 263,
                 Left = 20,
                 Width = 390,
                 Minimum = 1,
                 Maximum = 3600,
                 Value = Math.Max(1, _settings.GitOperationTimeoutSeconds),
-                Font = new Font("Segoe UI", 10),
-                BackColor = _settings.IsDarkMode ? Color.FromArgb(45, 45, 48) : Color.White,
-                ForeColor = _settings.IsDarkMode ? Color.Gainsboro : Color.Black
+                Font = new Font("Segoe UI", 10)
             };
 
             void UpdateTimeoutInputState() {
@@ -2758,7 +2740,7 @@ namespace GitBranchSwitcher {
 
             var btnOk = new Button {
                 Text = "💾 保存并应用",
-                Top = 350,
+                Top = 315,
                 Left = 20,
                 Width = 390,
                 Height = 40,
@@ -2771,7 +2753,7 @@ namespace GitBranchSwitcher {
             btnOk.FlatAppearance.BorderSize = 0;
 
             form.Controls.AddRange(new Control[] {
-                lblTheme, cmbThemes, lblColl, cmbCollection, chkDarkMode, chkEnableTimeout, lblTimeoutSeconds, numTimeoutSeconds, btnOk
+                lblTheme, cmbThemes, lblColl, cmbCollection, chkEnableTimeout, lblTimeoutSeconds, numTimeoutSeconds, btnOk
             });
             form.AcceptButton = btnOk;
 
@@ -2815,14 +2797,6 @@ namespace GitBranchSwitcher {
                     settingsChanged = true;
                 }
 
-                // 3. 保存深色模式
-                if (chkDarkMode.Checked != _settings.IsDarkMode) {
-                    _settings.IsDarkMode = chkDarkMode.Checked;
-                    ApplyThemeColors();
-                    needApply = true;
-                    settingsChanged = true;
-                }
-
                 bool newEnableTimeout = chkEnableTimeout.Checked;
                 int newTimeoutSeconds = Decimal.ToInt32(numTimeoutSeconds.Value);
                 if (newEnableTimeout != _settings.EnableGitOperationTimeout) {
@@ -2860,61 +2834,7 @@ namespace GitBranchSwitcher {
                 return 2;
             return 1;
         }
-        
-        private void ApplyThemeColors() {
-            bool dark = _settings.IsDarkMode;
 
-            // 定义调色板
-            Color formBack = dark ? Color.FromArgb(32, 32, 32) : Color.WhiteSmoke;
-            Color formFore = dark ? Color.Gainsboro : Color.Black;
-            Color controlBack = dark ? Color.FromArgb(45, 45, 48) : Color.White;
-            Color controlFore = dark ? Color.Gainsboro : Color.Black;
-    
-            // 1. 设置主窗体
-            this.BackColor = formBack;
-            this.ForeColor = formFore;
-
-            // 2. 设置容器标题颜色 (GroupBox)
-            Control[] groups = { grpTop, grpList, grpActions, grpDetails, grpLog };
-            foreach (var g in groups) {
-                if (g != null) g.ForeColor = formFore;
-            }
-
-            // 3. 设置列表和输入框 (List/Edit)
-            Control[] lists = { lbParents, lvRepos, lvFileChanges, txtLog, txtCommitMsg, cmbTargetBranch, txtCommitMsg };
-            foreach (var c in lists) {
-                if (c != null) {
-                    c.BackColor = controlBack;
-                    c.ForeColor = controlFore;
-                }
-            }
-
-            // 4. 设置标签 (Label)
-            // 排除 lblStateText 因为它是动态颜色的
-            Control[] labels = { lblTargetBranch, lblRepoInfo, lblFetchStatus };
-            foreach (var l in labels) {
-                if (l != null) l.ForeColor = formFore;
-            }
-
-            // 5. 特殊处理独立窗口
-            if (consoleWindow != null) {
-                consoleWindow.BackColor = formBack;
-                consoleWindow.ForeColor = formFore;
-            }
-    
-            // 6. 强制刷新列表项颜色 (因为 ListViewItem 颜色可能是之前渲染的)
-            if (lvRepos != null && lvRepos.Items.Count > 0) {
-                lvRepos.BeginUpdate();
-                foreach (ListViewItem item in lvRepos.Items) {
-                    RenderRepoItem(item);
-                }
-                lvRepos.EndUpdate();
-            }
-            if (statusTheme != null) {
-                statusTheme.ForeColor = _settings.IsDarkMode ? Color.Gray : Color.DimGray;
-            }
-        }
-        
         private void EnterFloatMode()
         {
             // 获取当前展示的图片 (青蛙图或藏品图)
@@ -2972,6 +2892,17 @@ namespace GitBranchSwitcher {
             }
         }
 
+        private string GetDefaultMarqueeEasterEgg() {
+            var me = Environment.UserName;
+            string[] eggs = {
+                $"{me}，今天切线零冲突",
+                $"{me}，愿你的 stash 一次成功",
+                $"{me}，愿所有 checkout 都丝滑"
+            };
+            int index = DateTime.Today.DayOfYear % eggs.Length;
+            return eggs[index];
+        }
+
         // [核心] 初始化跑马灯
         // 务必在 InitUi() 最后一行调用
         private async void InitMarqueeAnimation() {
@@ -2987,8 +2918,7 @@ namespace GitBranchSwitcher {
             this.Text = _cleanBaseTitle;
 
             // 3. 读取公告 (关键：限制长度防止显示不全)
-            var me = Environment.UserName;
-            string textToShow = me + " 2026 新年快乐！！"; 
+            string textToShow = GetDefaultMarqueeEasterEgg();
             try {
                 string noticePath = Path.Combine(_settings.UpdateSourcePath, "notice.txt");
                 var readTask = Task.Run(() => {

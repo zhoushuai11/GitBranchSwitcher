@@ -38,8 +38,6 @@ namespace GitBranchSwitcher {
         
         public string SelectedTheme { get; set; } = "";
         public string SelectedCollectionItem { get; set; } = "Random";
-        public bool IsDarkMode { get; set; } = false;
-
         public DateTime LastStatDate { get; set; } = DateTime.MinValue;
         public int TodaySwitchCount { get; set; } = 0;
         public double TodayTotalSeconds { get; set; } = 0;
