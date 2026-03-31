@@ -63,8 +63,6 @@ namespace GitBranchSwitcher
                     var sw = Stopwatch.StartNew();
                     bool ok = false;
                     string msg = "";
-                    string currentBranch = "";
-
                     try
                     {
                         var res = GitHelper.SwitchAndPull(
@@ -87,28 +85,11 @@ namespace GitBranchSwitcher
                             }));
                         ok = res.ok;
                         msg = res.message;
-                        // 更新实体状态（注意：这里修改的是引用对象，UI层需注意线程安全或刷新）
-                        currentBranch = GitHelper.GetFriendlyBranch(repo.Path);
                         repo.SwitchOk = ok;
                         repo.LastMessage = msg;
-                        repo.CurrentBranch = currentBranch;
-                        
-                        var changes = GitHelper.GetFileChanges(repo.Path);
-                        repo.IsDirty = (changes.Count > 0);
-                        var syncResult = GitHelper.GetSyncCounts(repo.Path);
-                        repo.IsSyncChecked = true;
-                        if (syncResult != null)
-                        {
-                            repo.HasUpstream = true;
-                            repo.Incoming = syncResult.Value.behind;
-                            repo.Outgoing = syncResult.Value.ahead;
-                        }
-                        else
-                        {
-                            repo.HasUpstream = false;
-                            repo.Incoming = 0;
-                            repo.Outgoing = 0;
-                        }
+                        if (ok)
+                            repo.CurrentBranch = targetBranch;
+                        repo.IsSyncChecked = false;
                     }
                     catch (Exception ex)
                     {

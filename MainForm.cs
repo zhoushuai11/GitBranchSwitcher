@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Text;
@@ -72,7 +73,11 @@ namespace GitBranchSwitcher {
         private List<string> _allBranches = new List<string>();
         private AppSettings _settings;
         private System.Threading.CancellationTokenSource? _loadCts;
+        private CancellationTokenSource? _parentSelectionDebounceCts;
+        private CancellationTokenSource? _parentBranchRefreshCts;
+        private CancellationTokenSource? _switchPostProcessCts;
         private int _loadSeq = 0;
+        private bool _suppressParentItemCheck = false;
         private HashSet<string> _checkedParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private GitWorkflowService _workflowService;
 
@@ -209,7 +214,7 @@ namespace GitBranchSwitcher {
                 UpdateBranchDropdown();
             }
 
-            _ = LoadReposForCheckedParentsAsync(false);
+            _ = LoadReposForCheckedParentsAsync(false, includeRepoDetails: true, refreshBranchCatalog: true, autoFetchAfterLoad: true);
             _workflowService = new GitWorkflowService(_settings.MaxParallel);
         }
 
@@ -372,7 +377,7 @@ namespace GitBranchSwitcher {
                     }
 
                     SeedParentsToUi();
-                    _ = LoadReposForCheckedParentsAsync(true);
+                    QueueLoadReposForCheckedParents(forceRescan: true);
                 }
             };
             btnRemoveParent.Click += async (_, __) => {
@@ -391,9 +396,9 @@ namespace GitBranchSwitcher {
 
                 _settings.Save();
                 SeedParentsToUi();
-                await LoadReposForCheckedParentsAsync(true);
+                QueueLoadReposForCheckedParents(forceRescan: true);
             };
-            btnToggleParents.Click += async (_, __) => {
+            btnToggleParents.Click += (_, __) => {
                 bool isAllChecked = lbParents.CheckedItems.Count == lbParents.Items.Count;
                 bool targetState = !isAllChecked;
                 _checkedParents.Clear();
@@ -403,11 +408,13 @@ namespace GitBranchSwitcher {
                         _checkedParents.Add(((ParentFolderItem)item).Path);
                 }
 
+                _suppressParentItemCheck = true;
                 for (int i = 0; i < lbParents.Items.Count; i++)
                     lbParents.SetItemChecked(i, targetState);
-                await LoadReposForCheckedParentsAsync(targetState ? false : true);
+                _suppressParentItemCheck = false;
+                QueueLoadReposForCheckedParents(forceRescan: !targetState, includeRepoDetails: false, refreshBranchCatalog: false, autoFetchAfterLoad: false, debounceMs: 0);
             };
-            lbParents.ItemCheck += async (_, e) => {
+            lbParents.ItemCheck += (_, e) => { if (_suppressParentItemCheck) return;
                 // [修改] 从对象中获取 Path，而不是直接 ToString
                 var item = lbParents.Items[e.Index] as ParentFolderItem;
                 if (item == null) return;
@@ -456,7 +463,6 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnToggleSelect);
             repoToolbar.Controls.Add(btnRescan);
             repoToolbar.Controls.Add(btnFetch);
-            repoToolbar.Controls.Add(btnFetchAll);
             repoToolbar.Controls.Add(new Label {
                 Width = 10
             });
@@ -512,7 +518,7 @@ namespace GitBranchSwitcher {
                     }
                 }
             };
-            btnRescan.Click += async (_, __) => await LoadReposForCheckedParentsAsync(true);
+            btnRescan.Click += async (_, __) => await LoadReposForCheckedParentsAsync(true, includeRepoDetails: true, refreshBranchCatalog: true, autoFetchAfterLoad: true);
             btnNewClone.Click += (_, __) => {
                 var form = new CloneForm();
                 if (form.ShowDialog(this) == DialogResult.OK && form.CreatedWorkspaces.Count > 0) {
@@ -528,7 +534,7 @@ namespace GitBranchSwitcher {
                     if (c) {
                         _settings.Save();
                         SeedParentsToUi();
-                        _ = LoadReposForCheckedParentsAsync(true);
+                        QueueLoadReposForCheckedParents(forceRescan: true);
                     }
                 }
             };
@@ -1099,6 +1105,7 @@ namespace GitBranchSwitcher {
             if (lbParents == null) return;
             lbParents.BeginUpdate();
             lbParents.Items.Clear();
+            _suppressParentItemCheck = true;
     
             foreach (var p in _settings.ParentPaths) {
                 // [修改] 使用包装对象而不是直接添加字符串
@@ -1109,6 +1116,7 @@ namespace GitBranchSwitcher {
                     lbParents.SetItemChecked(i, true);
             }
 
+            _suppressParentItemCheck = false;
             lbParents.EndUpdate();
     
             // [新增] 触发后台刷新分支名
@@ -1116,9 +1124,13 @@ namespace GitBranchSwitcher {
         }
 
         // [新增] 异步获取父目录分支名
-        private async Task RefreshParentBranchesAsync() {
+        private async Task RefreshParentBranchesAsync(CancellationToken externalToken = default) {
+            _parentBranchRefreshCts?.Cancel();
+            _parentBranchRefreshCts?.Dispose();
+            _parentBranchRefreshCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
+            var token = _parentBranchRefreshCts.Token;
             // 1. 简单防抖
-            await Task.Delay(200); 
+            await Task.Delay(200, token); 
 
             // 2. 收集需要更新的 UI 项
             var itemsToUpdate = new List<ParentFolderItem>();
@@ -1140,9 +1152,11 @@ namespace GitBranchSwitcher {
 
             // 4. 后台并发处理
             await Task.Run(() => {
-                var opts = new ParallelOptions { MaxDegreeOfParallelism = 4 };
+                var opts = new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = token };
         
                 Parallel.ForEach(itemsToUpdate, opts, (item) => {
+                    if (token.IsCancellationRequested)
+                        return;
                     // A. 判断是否为 Git 目录
                     if (Directory.Exists(System.IO.Path.Combine(item.Path, ".git"))) {
                         // B. 获取分支名
@@ -1163,7 +1177,7 @@ namespace GitBranchSwitcher {
             });
 
             // 5. 回到 UI 线程刷新显示
-            if (!lbParents.IsDisposed) {
+            if (!token.IsCancellationRequested && !lbParents.IsDisposed) {
                 this.BeginInvoke(new Action(() => {
                     lbParents.BeginUpdate();
                     // 触发列表重绘
@@ -1172,6 +1186,39 @@ namespace GitBranchSwitcher {
                     }
                     lbParents.EndUpdate();
                 }));
+            }
+        }
+
+        private void QueueLoadReposForCheckedParents(
+            bool forceRescan,
+            bool includeRepoDetails = true,
+            bool refreshBranchCatalog = true,
+            bool autoFetchAfterLoad = true,
+            int debounceMs = 150) {
+            _parentSelectionDebounceCts?.Cancel();
+            _parentSelectionDebounceCts?.Dispose();
+            _parentSelectionDebounceCts = new CancellationTokenSource();
+            var token = _parentSelectionDebounceCts.Token;
+
+            _ = QueueLoadReposForCheckedParentsCoreAsync(forceRescan, includeRepoDetails, refreshBranchCatalog, autoFetchAfterLoad, debounceMs, token);
+        }
+
+        private async Task QueueLoadReposForCheckedParentsCoreAsync(
+            bool forceRescan,
+            bool includeRepoDetails,
+            bool refreshBranchCatalog,
+            bool autoFetchAfterLoad,
+            int debounceMs,
+            CancellationToken token) {
+            try {
+                if (debounceMs > 0)
+                    await Task.Delay(debounceMs, token);
+                if (token.IsCancellationRequested)
+                    return;
+                await LoadReposForCheckedParentsAsync(forceRescan, includeRepoDetails, refreshBranchCatalog, autoFetchAfterLoad);
+            } catch (OperationCanceledException) {
+            } catch (Exception ex) {
+                Log($"[LoadRepos] {ex.Message}");
             }
         }
 
@@ -1201,6 +1248,55 @@ namespace GitBranchSwitcher {
                 return "\u5b8c\u6210";
 
             return text.Length > 18 ? text[..18] + "..." : text;
+        }
+
+        private static string SummarizeSwitchFailure(string message) {
+            if (string.IsNullOrWhiteSpace(message))
+                return "失败";
+
+            static string Shorten(string text) {
+                string cleaned = text.Trim().TrimStart('>', ' ', '\t');
+                cleaned = cleaned.Replace("❌", "").Replace("⚠️", "").Replace("⚠", "").Trim();
+                if (cleaned.StartsWith("原因:", StringComparison.OrdinalIgnoreCase))
+                    cleaned = cleaned["原因:".Length..].Trim();
+                if (cleaned.StartsWith("失败:", StringComparison.OrdinalIgnoreCase))
+                    cleaned = cleaned["失败:".Length..].Trim();
+                if (cleaned.StartsWith("Error:", StringComparison.OrdinalIgnoreCase))
+                    cleaned = cleaned["Error:".Length..].Trim();
+                int colonIndex = cleaned.LastIndexOf(':');
+                if (colonIndex >= 0 && colonIndex < cleaned.Length - 1)
+                    cleaned = cleaned[(colonIndex + 1)..].Trim();
+                return cleaned.Length > 18 ? cleaned[..18] + "..." : cleaned;
+            }
+
+            var lines = message
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => x.Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList();
+
+            foreach (var line in Enumerable.Reverse(lines)) {
+                if (line.Equals("OK", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (line.Contains("无法快进") || line.Contains("分叉"))
+                    return "远程分叉";
+                if (line.Contains("无上游"))
+                    return "无上游";
+                if (line.Contains("本地有修改"))
+                    return "本地有修改";
+                if (line.Contains("不存在"))
+                    return "分支不存在";
+                if (line.Contains("冲突"))
+                    return "有冲突";
+                if (line.Contains("超时"))
+                    return "git超时";
+                if (line.Contains("lock", StringComparison.OrdinalIgnoreCase))
+                    return "锁文件";
+                if (line.Contains("失败") || line.Contains("Error", StringComparison.OrdinalIgnoreCase))
+                    return Shorten(line);
+            }
+
+            return Shorten(lines.LastOrDefault() ?? message);
         }
 
         private void RenderRepoItem(ListViewItem item) {
@@ -1246,7 +1342,7 @@ namespace GitBranchSwitcher {
                 item.SubItems[0].ForeColor = Color.Crimson;
                 item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
                 item.BackColor = Color.FromArgb(255, 240, 240);
-                syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u5931\u8d25" : repo.LiveStatus;
+                syncText = SummarizeSwitchFailure(repo.LastMessage);
                 syncColor = Color.Crimson;
                 syncFont = new Font(item.Font, FontStyle.Bold);
             } else if (repo.IsSyncChecked) {
@@ -1283,7 +1379,7 @@ namespace GitBranchSwitcher {
         }
 
 
-        private async Task BatchSyncStatusUpdate() {
+        private async Task BatchSyncStatusUpdate(CancellationToken token = default) {
             if (lvRepos.Items.Count == 0)
                 return;
             var targetItems = new List<ListViewItem>();
@@ -1292,9 +1388,13 @@ namespace GitBranchSwitcher {
             statusLabel.Text = "正在后台扫描同步状态...";
             await Task.Run(() => {
                 var opts = new ParallelOptions {
-                    MaxDegreeOfParallelism = 10
+                    MaxDegreeOfParallelism = 10,
+                    CancellationToken = token
                 };
                 Parallel.ForEach(targetItems, opts, (item) => {
+                    if (token.IsCancellationRequested)
+                        return;
+
                     var repo = (GitRepo)item.Tag;
                     var changes = GitHelper.GetFileChanges(repo.Path);
                     repo.IsDirty = (changes.Count > 0);
@@ -1311,7 +1411,8 @@ namespace GitBranchSwitcher {
                     }
 
                     try {
-                        BeginInvoke((Action)(() => RenderRepoItem(item)));
+                        if (!token.IsCancellationRequested)
+                            BeginInvoke((Action)(() => RenderRepoItem(item)));
                     } catch {
                     }
                 });
@@ -1487,11 +1588,22 @@ namespace GitBranchSwitcher {
             }
         }
 
-        private async Task LoadReposForCheckedParentsAsync(bool forceRescan = false) {
+        private async Task LoadReposForCheckedParentsAsync(
+            bool forceRescan = false,
+            bool includeRepoDetails = true,
+            bool refreshBranchCatalog = false,
+            bool autoFetchAfterLoad = false) {
             _loadCts?.Cancel();
             _loadCts = new System.Threading.CancellationTokenSource();
             var token = _loadCts.Token;
             var seq = ++_loadSeq;
+            if (!forceRescan && !refreshBranchCatalog && !autoFetchAfterLoad) {
+                try {
+                    await Task.Delay(120, token);
+                } catch (OperationCanceledException) {
+                    return;
+                }
+            }
             lvRepos.BeginUpdate();
             lvRepos.Items.Clear();
             lvRepos.EndUpdate();
@@ -1534,8 +1646,9 @@ namespace GitBranchSwitcher {
 
                     lvRepos.EndUpdate();
                     statusLabel.Text = "加载完成 (缓存)";
-                    StartReadBranches(token);
-                    _ = BatchSyncStatusUpdate();
+                    if (!includeRepoDetails && !refreshBranchCatalog && !autoFetchAfterLoad)
+                        return;
+                    StartReadBranches(token, includeRepoDetails, refreshBranchCatalog, autoFetchAfterLoad);
                     return;
                 }
             }
@@ -1590,11 +1703,12 @@ namespace GitBranchSwitcher {
             lvRepos.EndUpdate();
             statusProgress.Visible = false;
             statusLabel.Text = $"扫描完成";
-            StartReadBranches(token);
-            _ = BatchSyncStatusUpdate();
+            if (!includeRepoDetails && !refreshBranchCatalog && !autoFetchAfterLoad)
+                return;
+            StartReadBranches(token, includeRepoDetails, refreshBranchCatalog, autoFetchAfterLoad);
         }
 
-        private void StartReadBranches(System.Threading.CancellationToken token) {
+        private void StartReadBranches(CancellationToken token, bool includeRepoDetails, bool refreshBranchCatalog, bool autoFetchAfterLoad) {
             var tasks = new List<Task>();
             foreach (ListViewItem item in lvRepos.Items) {
                 tasks.Add(Task.Run(() => {
@@ -1612,13 +1726,17 @@ namespace GitBranchSwitcher {
                     foreach (ListViewItem item in lvRepos.Items)
                         RenderRepoItem(item);
                     lvRepos.EndUpdate();
-                    RefreshBranchesAsync();
-                    _ = AutoFetchAndRefreshAsync(token);
+                    if (refreshBranchCatalog)
+                        _ = RefreshBranchesAsync(token);
+                    if (includeRepoDetails)
+                        _ = BatchSyncStatusUpdate(token);
+                    if (autoFetchAfterLoad)
+                        _ = AutoFetchAndRefreshAsync(token);
                 }));
             });
         }
 
-        private async Task AutoFetchAndRefreshAsync(System.Threading.CancellationToken token) {
+        private async Task AutoFetchAndRefreshAsync(CancellationToken token) {
             try {
                 var allPaths = new List<string>();
                 var rootPaths = new List<string>();
@@ -1636,7 +1754,8 @@ namespace GitBranchSwitcher {
                 lblFetchStatus.Text = rootPaths.Count > 0? $"📡 正在同步 {targetPaths.Count} 个主仓库..." : $"📡 正在同步 {targetPaths.Count} 个仓库...";
                 await Task.Run(() => {
                     var opts = new ParallelOptions {
-                        MaxDegreeOfParallelism = 8
+                        MaxDegreeOfParallelism = 8,
+                        CancellationToken = token
                     };
                     Parallel.ForEach(targetPaths, opts, (path) => {
                         if (token.IsCancellationRequested)
@@ -1648,14 +1767,14 @@ namespace GitBranchSwitcher {
                     return;
                 BeginInvoke((Action)(() => {
                     lblFetchStatus.Text = "";
-                    RefreshBranchesAsync();
+                    _ = RefreshBranchesAsync(token);
                 }));
-                await BatchSyncStatusUpdate();
+                await BatchSyncStatusUpdate(token);
             } catch {
             }
         }
 
-        private async Task RefreshBranchesAsync() {
+        private async Task RefreshBranchesAsync(CancellationToken token = default) {
             if (lvRepos == null || lvRepos.IsDisposed || lvRepos.Items.Count == 0)
                 return;
             var targetPaths = new List<string>();
@@ -1667,17 +1786,21 @@ namespace GitBranchSwitcher {
             var all = new HashSet<string>();
             var tasks = new List<Task<IEnumerable<string>>>();
             foreach (var path in targetPaths)
-                tasks.Add(Task.Run(() => GitHelper.GetAllBranches(path)));
+                tasks.Add(Task.Run(() => GitHelper.GetAllBranches(path), token));
             try {
                 var results = await Task.WhenAll(tasks);
                 foreach (var list in results)
                     if (list != null)
                         foreach (var b in list)
                             all.Add(b);
+            } catch (OperationCanceledException) {
+                return;
             } catch (Exception ex) {
                 Log($"Err: {ex.Message}");
             }
 
+            if (token.IsCancellationRequested)
+                return;
             _allBranches = all.OrderBy(x => x).ToList();
             if (_allBranches.Count > 0) {
                 if (_settings.CachedBranchList == null)
@@ -1959,20 +2082,9 @@ namespace GitBranchSwitcher {
 
                 repo.SwitchOk = retryResult.ok;
                 repo.LastMessage = retryResult.message;
-                repo.CurrentBranch = GitHelper.GetFriendlyBranch(repo.Path);
-                var changes = GitHelper.GetFileChanges(repo.Path);
-                repo.IsDirty = changes.Count > 0;
-                var syncResult = GitHelper.GetSyncCounts(repo.Path);
-                repo.IsSyncChecked = true;
-                if (syncResult != null) {
-                    repo.HasUpstream = true;
-                    repo.Incoming = syncResult.Value.behind;
-                    repo.Outgoing = syncResult.Value.ahead;
-                } else {
-                    repo.HasUpstream = false;
-                    repo.Incoming = 0;
-                    repo.Outgoing = 0;
-                }
+                if (retryResult.ok)
+                    repo.CurrentBranch = target;
+                repo.IsSyncChecked = false;
 
                 repo.IsSwitching = false;
                 repo.SwitchStartedAt = null;
@@ -1981,6 +2093,86 @@ namespace GitBranchSwitcher {
                     item.Text = (retryResult.ok ? "\u6210\u529f" : "\u5931\u8d25") + " \u91cd\u8bd5";
                     RenderRepoItem(item);
                 }
+            }
+        }
+
+        private async Task RefreshRepoSnapshotsAsync(IEnumerable<ListViewItem> sourceItems, CancellationToken token, bool refreshBranchCatalog) {
+            var targetItems = sourceItems.Where(item => item?.Tag is GitRepo).Distinct().ToList();
+            if (targetItems.Count == 0 || token.IsCancellationRequested)
+                return;
+
+            await Task.Run(() => {
+                var opts = new ParallelOptions {
+                    MaxDegreeOfParallelism = 8,
+                    CancellationToken = token
+                };
+                Parallel.ForEach(targetItems, opts, item => {
+                    if (token.IsCancellationRequested || item.Tag is not GitRepo repo)
+                        return;
+
+                    repo.CurrentBranch = GitHelper.GetFriendlyBranch(repo.Path);
+                    var changes = GitHelper.GetFileChanges(repo.Path);
+                    repo.IsDirty = changes.Count > 0;
+                    var syncResult = GitHelper.GetSyncCounts(repo.Path);
+                    repo.IsSyncChecked = true;
+                    if (syncResult != null) {
+                        repo.HasUpstream = true;
+                        repo.Incoming = syncResult.Value.behind;
+                        repo.Outgoing = syncResult.Value.ahead;
+                    } else {
+                        repo.HasUpstream = false;
+                        repo.Incoming = 0;
+                        repo.Outgoing = 0;
+                    }
+                });
+            }, token);
+
+            if (token.IsCancellationRequested || IsDisposed || lvRepos.IsDisposed)
+                return;
+
+            BeginInvoke((Action)(() => {
+                lvRepos.BeginUpdate();
+                foreach (var item in targetItems)
+                    RenderRepoItem(item);
+                lvRepos.EndUpdate();
+            }));
+
+            if (refreshBranchCatalog)
+                await RefreshBranchesAsync(token);
+        }
+
+        private void StartPostSwitchBackgroundWork(double gitSeconds, List<ListViewItem> items, int repoCount) {
+            _switchPostProcessCts?.Cancel();
+            _switchPostProcessCts?.Dispose();
+            _switchPostProcessCts = new CancellationTokenSource();
+            var token = _switchPostProcessCts.Token;
+
+            _ = RunPostSwitchBackgroundWorkAsync(gitSeconds, items, repoCount, token);
+        }
+
+        private async Task RunPostSwitchBackgroundWorkAsync(double gitSeconds, List<ListViewItem> items, int repoCount, CancellationToken token) {
+            var postSw = Stopwatch.StartNew();
+            try {
+                await RefreshRepoSnapshotsAsync(items, token, refreshBranchCatalog: true);
+                await RefreshParentBranchesAsync(token);
+#if !BOSS_MODE && !PURE_MODE
+                if (!token.IsCancellationRequested && !string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                    int currentCardCount = _myCollection.Count;
+                    int currentScore = _myCollection.Sum(x => x.Score);
+                    var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(gitSeconds, 0, currentCardCount, currentScore);
+                    if (!token.IsCancellationRequested && !IsDisposed)
+                        BeginInvoke((Action)(() => UpdateStatsUi(nc, nt, ns)));
+                }
+#endif
+                if (!token.IsCancellationRequested)
+                    await FinishFrogTravelAndDrawCard(repoCount, uploadLeaderboard: false, token);
+
+                if (!token.IsCancellationRequested && !IsDisposed)
+                    BeginInvoke((Action)(() => statusLabel.Text = $"Done (Git {gitSeconds:F1}s | Post {postSw.Elapsed.TotalSeconds:F1}s)"));
+                Log($"Switch done: Git {gitSeconds:F1}s | Post {postSw.Elapsed.TotalSeconds:F1}s");
+            } catch (OperationCanceledException) {
+            } catch (Exception ex) {
+                Log($"[PostSwitch] {ex.Message}");
             }
         }
 
@@ -2002,8 +2194,10 @@ namespace GitBranchSwitcher {
         }
 
         // [修改] 抽卡核心逻辑：支持传入 RepoCount 调整概率，且 SSR/UR 优先未收录
-        private async Task FinishFrogTravelAndDrawCard(int repoCount) {
+        private async Task FinishFrogTravelAndDrawCard(int repoCount, bool uploadLeaderboard = true, CancellationToken token = default) {
             string baseLibPath = Path.Combine(_settings.UpdateSourcePath, "Img");
+            if (token.IsCancellationRequested)
+                return;
 
             if (!Directory.Exists(baseLibPath)) {
                 try {
@@ -2052,7 +2246,7 @@ namespace GitBranchSwitcher {
                     int totalScore = _myCollection.Sum(x => x.Score);
 
 #if !BOSS_MODE && !PURE_MODE
-                    if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                    if (uploadLeaderboard && !string.IsNullOrEmpty(_settings.LeaderboardPath) && !token.IsCancellationRequested) {
                         await LeaderboardService.UploadMyScoreAsync(0, 0, _myCollection.Count, totalScore);
                     }
 #endif
@@ -2063,11 +2257,11 @@ namespace GitBranchSwitcher {
                         var originalColor = statePanel.BackColor;
                         statePanel.BackColor = Color.Gold;
                         flashTimer.Start();
-                        await Task.Delay(500);
+                        await Task.Delay(500, token);
                         statePanel.BackColor = originalColor;
-                        await Task.Delay(200);
+                        await Task.Delay(200, token);
                         statePanel.BackColor = Color.Gold;
-                        await Task.Delay(500);
+                        await Task.Delay(500, token);
                         statePanel.BackColor = originalColor;
                     }
                 } catch (Exception ex) {
@@ -2258,6 +2452,7 @@ namespace GitBranchSwitcher {
             var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
             if (!items.Any())
                 return;
+            _switchPostProcessCts?.Cancel();
             var targetRepos = items.Select(i => (GitRepo)i.Tag).ToList();
             foreach (var item in items) {
                 var repo = (GitRepo)item.Tag;
@@ -2284,6 +2479,9 @@ namespace GitBranchSwitcher {
                     result.Repo.IsSwitching = false;
                     result.Repo.SwitchStartedAt = null;
                     result.Repo.LiveStatus = "";
+                    if (result.Success)
+                        result.Repo.CurrentBranch = target;
+                    result.Repo.IsSyncChecked = false;
                     item.Text = (result.Success ? "\u6210\u529f" : "\u5931\u8d25") + $" {result.DurationSeconds:F1}s";
                     RenderRepoItem(item);
                 }
@@ -2320,7 +2518,7 @@ namespace GitBranchSwitcher {
 
             try {
                 // 执行切线
-                double totalSeconds = await _workflowService.SwitchReposAsync(
+                await _workflowService.SwitchReposAsync(
                     targetRepos,
                     target,
                     _settings.StashOnSwitch,
@@ -2332,8 +2530,12 @@ namespace GitBranchSwitcher {
                     null);
 
                 await HandlePostSwitchLockFailuresAsync(targetRepos, items, target, liveLogHandler);
-                await RefreshParentBranchesAsync();
-                totalSeconds = totalStopwatch.Elapsed.TotalSeconds;
+                double gitSeconds = totalStopwatch.Elapsed.TotalSeconds;
+                double totalSeconds = gitSeconds;
+                statusLabel.Text = $"Git done ({gitSeconds:F1}s) | Post in background";
+                Log($"Git done in {gitSeconds:F1}s. Post-processing moved to background.");
+                StartPostSwitchBackgroundWork(gitSeconds, items, targetRepos.Count);
+                if (false) {
 
 #if !BOSS_MODE && !PURE_MODE
                 if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
@@ -2348,6 +2550,7 @@ namespace GitBranchSwitcher {
                 statusLabel.Text = $"完成 (总耗时 {totalSeconds:F1}s)";
                 Log($"🏁 全部完成，总耗时 {totalSeconds:F1}s");
 
+                }
             } finally {
                 // === [新增 3] 清理计时器 ===
                 uiRefreshTimer.Stop();
