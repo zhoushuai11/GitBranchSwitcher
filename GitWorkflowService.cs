@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
@@ -6,15 +6,16 @@ using System.Threading.Tasks;
 
 namespace GitBranchSwitcher
 {
-    // 定义进度报告的数据结构
     public class RepoSwitchResult
     {
         public GitRepo Repo { get; set; }
         public bool Success { get; set; }
+        public bool Warning { get; set; }
         public string Message { get; set; }
+        public string StatusText { get; set; }
         public double DurationSeconds { get; set; }
-        public int ProgressIndex { get; set; } // 当前是第几个
-        public int TotalCount { get; set; }    // 总数
+        public int ProgressIndex { get; set; }
+        public int TotalCount { get; set; }
     }
 
     public class RepoSwitchLogEntry
@@ -40,10 +41,11 @@ namespace GitBranchSwitcher
         }
 
         public async Task<double> SwitchReposAsync(
-            List<GitRepo> repos, 
-            string targetBranch, 
-            bool useStash, 
-            bool fastMode, 
+            List<GitRepo> repos,
+            string targetBranch,
+            bool useStash,
+            bool reapplyStash,
+            bool fastMode,
             bool enableOperationTimeout,
             int operationTimeoutSeconds,
             IProgress<RepoSwitchResult> progress,
@@ -62,13 +64,16 @@ namespace GitBranchSwitcher
                     await sem.WaitAsync();
                     var sw = Stopwatch.StartNew();
                     bool ok = false;
+                    bool warning = false;
                     string msg = "";
+                    string statusText = "";
                     try
                     {
                         var res = GitHelper.SwitchAndPull(
                             repo.Path,
                             targetBranch,
                             useStash,
+                            reapplyStash,
                             fastMode,
                             enableOperationTimeout,
                             operationTimeoutSeconds,
@@ -83,10 +88,17 @@ namespace GitBranchSwitcher
                                 Repo = repo,
                                 Message = line
                             }));
+
                         ok = res.ok;
+                        warning = res.warning;
                         msg = res.message;
+                        statusText = res.statusText;
                         repo.SwitchOk = ok;
                         repo.LastMessage = msg;
+                        repo.SwitchSeverity = warning
+                            ? RepoSwitchSeverity.Warning
+                            : ok ? RepoSwitchSeverity.None : RepoSwitchSeverity.Error;
+                        repo.SwitchStatusText = warning ? statusText : "";
                         if (ok)
                             repo.CurrentBranch = targetBranch;
                         repo.IsSyncChecked = false;
@@ -94,7 +106,11 @@ namespace GitBranchSwitcher
                     catch (Exception ex)
                     {
                         ok = false;
+                        warning = false;
                         msg = ex.Message;
+                        statusText = "";
+                        repo.SwitchSeverity = RepoSwitchSeverity.Error;
+                        repo.SwitchStatusText = "";
                         logProgress?.Report(new RepoSwitchLogEntry
                         {
                             Repo = repo,
@@ -105,16 +121,16 @@ namespace GitBranchSwitcher
                     {
                         sw.Stop();
                         sem.Release();
-                        
-                        // 线程安全地增加计数
+
                         int currentDone = Interlocked.Increment(ref finishedCount);
 
-                        // 报告进度
                         progress?.Report(new RepoSwitchResult
                         {
                             Repo = repo,
                             Success = ok,
+                            Warning = warning,
                             Message = msg,
+                            StatusText = statusText,
                             DurationSeconds = sw.Elapsed.TotalSeconds,
                             ProgressIndex = currentDone,
                             TotalCount = repos.Count

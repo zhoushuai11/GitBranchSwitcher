@@ -35,7 +35,7 @@ namespace GitBranchSwitcher {
         private Label lblTargetBranch, lblFetchStatus;
         private ComboBox cmbTargetBranch;
         private Button btnSwitchAll, btnUseCurrentBranch, btnToggleConsole, btnMyCollection;
-        private CheckBox chkStashOnSwitch, chkFastMode, chkConfirmOnSwitch;
+        private CheckBox chkStashOnSwitch, chkReapplyStashOnSwitch, chkFastMode, chkConfirmOnSwitch;
 
         // 状态与动画区
         private FlowLayoutPanel statePanel;
@@ -59,7 +59,7 @@ namespace GitBranchSwitcher {
 
         // 5. 日志区
         private GroupBox grpLog;
-        private TextBox txtLog;
+        private RichTextBox txtLog;
 
         // 底部状态栏
         private StatusStrip statusStrip;
@@ -231,7 +231,9 @@ namespace GitBranchSwitcher {
             try {
                 splitGlobal.SplitterDistance = (int)(this.Height * 0.75);
                 splitUpper.SplitterDistance = 140;
-                splitMiddle.SplitterDistance = (int)(splitMiddle.Width * 0.65);
+                // Give the right-side Actions panel more room so the state card area
+                // does not collapse after adding more switch options.
+                splitMiddle.SplitterDistance = (int)(splitMiddle.Width * 0.60);
             } catch {
             }
         }
@@ -247,8 +249,8 @@ namespace GitBranchSwitcher {
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             string vStr = $"{version.Major}.{version.Minor}.{version.Build}";
             Text = $"Git 分支管理工具 - v{vStr}";
-            Width = 1800;
-            Height = 1150;
+            Width = 1926;
+            Height = 1197;
             StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.BackColor = Color.WhiteSmoke;
@@ -730,6 +732,15 @@ namespace GitBranchSwitcher {
                 Dock = DockStyle.Top,
                 Padding = new Padding(0, 5, 0, 0)
             };
+            chkReapplyStashOnSwitch = new CheckBox {
+                Text = "尝试 Reapply 本地 Stash",
+                AutoSize = true,
+                Checked = _settings.ReapplyStashOnSwitch,
+                ForeColor = Color.Goldenrod,
+                Dock = DockStyle.Top,
+                Padding = new Padding(18, 2, 0, 0)
+            };
+            chkReapplyStashOnSwitch.Text = "切完线后 Reapply Stash";
             chkFastMode = new CheckBox {
                 Text = "⚡ 极速本地切换 (跳过 Fetch)",
                 AutoSize = true,
@@ -838,6 +849,7 @@ namespace GitBranchSwitcher {
             pnlActionContent.Controls.Add(pnlBtnsWrap);
             pnlActionContent.Controls.Add(chkConfirmOnSwitch);
             pnlActionContent.Controls.Add(chkFastMode);
+            pnlActionContent.Controls.Add(chkReapplyStashOnSwitch);
             pnlActionContent.Controls.Add(chkStashOnSwitch);
             pnlActionContent.Controls.Add(btnSwitchAll);
             pnlActionContent.Controls.Add(pnlSpacer1);
@@ -869,12 +881,18 @@ namespace GitBranchSwitcher {
             };
             chkStashOnSwitch.CheckedChanged += (_, __) => {
                 _settings.StashOnSwitch = chkStashOnSwitch.Checked;
+                UpdateStashOptionUi();
+                _settings.Save();
+            };
+            chkReapplyStashOnSwitch.CheckedChanged += (_, __) => {
+                _settings.ReapplyStashOnSwitch = chkReapplyStashOnSwitch.Checked;
                 _settings.Save();
             };
             chkFastMode.CheckedChanged += (_, __) => {
                 _settings.FastMode = chkFastMode.Checked;
                 _settings.Save();
             };
+            UpdateStashOptionUi();
             btnSwitchAll.Click += async (_, __) => await SwitchAllAsync();
             flashTimer = new System.Windows.Forms.Timer {
                 Interval = 1500
@@ -1036,14 +1054,15 @@ namespace GitBranchSwitcher {
             grpLog = new GroupBox {
                 Text = "⑤ 运行日志 (Logs)", Dock = DockStyle.Fill
             };
-            txtLog = new TextBox {
+            txtLog = new RichTextBox {
                 Dock = DockStyle.Fill,
-                Multiline = true,
-                ScrollBars = ScrollBars.Both,
                 ReadOnly = true,
                 Font = new Font("Consolas", 9),
                 BackColor = Color.WhiteSmoke,
-                BorderStyle = BorderStyle.None
+                ForeColor = Color.Black,
+                BorderStyle = BorderStyle.None,
+                WordWrap = false,
+                ScrollBars = RichTextBoxScrollBars.Both
             };
             grpLog.Controls.Add(txtLog);
 
@@ -1232,10 +1251,12 @@ namespace GitBranchSwitcher {
 
             if (text.Contains("[LockCleaner]", StringComparison.OrdinalIgnoreCase))
                 return "\u9501\u6587\u4ef6";
-            if (text.StartsWith("stash pop", StringComparison.OrdinalIgnoreCase))
+            if (text.StartsWith("stash apply", StringComparison.OrdinalIgnoreCase))
                 return "\u5e94\u7528\u6682\u5b58";
             if (text.StartsWith("stash push", StringComparison.OrdinalIgnoreCase))
                 return "\u6682\u5b58\u672c\u5730";
+            if (text.StartsWith("stash drop", StringComparison.OrdinalIgnoreCase))
+                return "\u5220\u9664\u6682\u5b58";
             if (text.StartsWith("checkout", StringComparison.OrdinalIgnoreCase))
                 return "\u5207\u6362\u5206\u652f";
             if (text.StartsWith("fetch", StringComparison.OrdinalIgnoreCase) || text.Contains("拉取"))
@@ -1337,6 +1358,13 @@ namespace GitBranchSwitcher {
                 item.BackColor = Color.FromArgb(240, 248, 255);
                 syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u7b49\u5f85" : repo.LiveStatus;
                 syncColor = Color.SteelBlue;
+                syncFont = new Font(item.Font, FontStyle.Bold);
+            } else if (repo.SwitchSeverity == RepoSwitchSeverity.Warning) {
+                item.SubItems[0].ForeColor = Color.Goldenrod;
+                item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
+                item.BackColor = Color.FromArgb(255, 251, 235);
+                syncText = string.IsNullOrWhiteSpace(repo.SwitchStatusText) ? "stash apply \u5931\u8d25" : repo.SwitchStatusText;
+                syncColor = Color.Goldenrod;
                 syncFont = new Font(item.Font, FontStyle.Bold);
             } else if (!repo.SwitchOk && !string.IsNullOrWhiteSpace(repo.LastMessage)) {
                 item.SubItems[0].ForeColor = Color.Crimson;
@@ -1838,11 +1866,20 @@ namespace GitBranchSwitcher {
             }
         }
 
+        private void UpdateStashOptionUi() {
+            if (chkStashOnSwitch == null || chkReapplyStashOnSwitch == null)
+                return;
+
+            bool showReapply = chkStashOnSwitch.Checked;
+            chkReapplyStashOnSwitch.Visible = showReapply;
+            chkReapplyStashOnSwitch.Enabled = showReapply;
+        }
+
         private bool ShowSwitchConfirmDialog(string targetBranch) {
             using var form = new Form {
                 Text = "\u26a0\ufe0f \u9ad8\u5371\u64cd\u4f5c\u786e\u8ba4",
-                Width = 450,
-                Height = 280,
+                Width = 520,
+                Height = 360,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
                 MaximizeBox = false,
@@ -1870,12 +1907,34 @@ namespace GitBranchSwitcher {
                 Font = new Font("Segoe UI", 9, FontStyle.Italic),
                 ForeColor = Color.Gray
             };
+            var chkStash = new CheckBox {
+                Text = "尝试 Stash 本地修改",
+                AutoSize = true,
+                Checked = chkStashOnSwitch.Checked,
+                Location = new Point(28, 145),
+                Font = new Font("Segoe UI", 10),
+                ForeColor = Color.DarkSlateBlue
+            };
+            var chkReapply = new CheckBox {
+                Text = "切完线后 Reapply Stash",
+                AutoSize = true,
+                Checked = chkReapplyStashOnSwitch.Checked,
+                Location = new Point(48, 178),
+                Font = new Font("Segoe UI", 10),
+                ForeColor = Color.Goldenrod
+            };
+            void UpdateDialogStashUi() {
+                chkReapply.Visible = chkStash.Checked;
+                chkReapply.Enabled = chkStash.Checked;
+            }
+            chkStash.CheckedChanged += (_, __) => UpdateDialogStashUi();
+            UpdateDialogStashUi();
             var btnOk = new Button {
                 Text = "\ud83d\ude80 \u786e\u8ba4\u5207\u7ebf",
                 DialogResult = DialogResult.OK,
                 Width = 160,
                 Height = 50,
-                Location = new Point(40, 160),
+                Location = new Point(80, 245),
                 BackColor = Color.ForestGreen,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -1888,7 +1947,7 @@ namespace GitBranchSwitcher {
                 DialogResult = DialogResult.Cancel,
                 Width = 160,
                 Height = 50,
-                Location = new Point(220, 160),
+                Location = new Point(270, 245),
                 BackColor = Color.IndianRed,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -1897,11 +1956,20 @@ namespace GitBranchSwitcher {
             };
             btnCancel.FlatAppearance.BorderSize = 0;
             form.Controls.AddRange(new Control[] {
-                lblTitle, lblBranch, lblHint, btnOk, btnCancel
+                lblTitle, lblBranch, lblHint, chkStash, chkReapply, btnOk, btnCancel
             });
             form.AcceptButton = btnOk;
             form.CancelButton = btnCancel;
-            return form.ShowDialog(this) == DialogResult.OK;
+            if (form.ShowDialog(this) != DialogResult.OK)
+                return false;
+
+            chkStashOnSwitch.Checked = chkStash.Checked;
+            chkReapplyStashOnSwitch.Checked = chkReapply.Checked;
+            _settings.StashOnSwitch = chkStash.Checked;
+            _settings.ReapplyStashOnSwitch = chkReapply.Checked;
+            UpdateStashOptionUi();
+            _settings.Save();
+            return true;
         }
 
         private bool ConfirmBatchLockRecovery(List<RepoLockRecoveryRequest> requests) {
@@ -2064,12 +2132,18 @@ namespace GitBranchSwitcher {
                 var retryResult = await Task.Run(() => {
                     var repair = GitHelper.RepairRepo(repo.Path);
                     if (!repair.ok)
-                        return (ok: false, message: repair.log);
+                        return new SwitchAndPullResult {
+                            ok = false,
+                            warning = false,
+                            message = repair.log,
+                            statusText = ""
+                        };
 
                     return GitHelper.SwitchAndPull(
                         repo.Path,
                         target,
                         _settings.StashOnSwitch,
+                        _settings.StashOnSwitch && _settings.ReapplyStashOnSwitch,
                         _settings.FastMode,
                         _settings.EnableGitOperationTimeout,
                         _settings.GitOperationTimeoutSeconds,
@@ -2082,6 +2156,10 @@ namespace GitBranchSwitcher {
 
                 repo.SwitchOk = retryResult.ok;
                 repo.LastMessage = retryResult.message;
+                repo.SwitchSeverity = retryResult.warning
+                    ? RepoSwitchSeverity.Warning
+                    : retryResult.ok ? RepoSwitchSeverity.None : RepoSwitchSeverity.Error;
+                repo.SwitchStatusText = retryResult.warning ? retryResult.statusText : "";
                 if (retryResult.ok)
                     repo.CurrentBranch = target;
                 repo.IsSyncChecked = false;
@@ -2090,7 +2168,7 @@ namespace GitBranchSwitcher {
                 repo.SwitchStartedAt = null;
                 repo.LiveStatus = "";
                 if (item != null) {
-                    item.Text = (retryResult.ok ? "\u6210\u529f" : "\u5931\u8d25") + " \u91cd\u8bd5";
+                    item.Text = (retryResult.warning ? "\u8b66\u544a" : retryResult.ok ? "\u6210\u529f" : "\u5931\u8d25") + " \u91cd\u8bd5";
                     RenderRepoItem(item);
                 }
             }
@@ -2460,6 +2538,8 @@ namespace GitBranchSwitcher {
                 repo.IsSwitching = false;
                 repo.SwitchStartedAt = null;
                 repo.LiveStatus = "\u7b49\u5f85";
+                repo.SwitchSeverity = RepoSwitchSeverity.None;
+                repo.SwitchStatusText = "";
                 item.Text = "\u6392\u961f\u4e2d";
                 RenderRepoItem(item);
             }
@@ -2482,7 +2562,7 @@ namespace GitBranchSwitcher {
                     if (result.Success)
                         result.Repo.CurrentBranch = target;
                     result.Repo.IsSyncChecked = false;
-                    item.Text = (result.Success ? "\u6210\u529f" : "\u5931\u8d25") + $" {result.DurationSeconds:F1}s";
+                    item.Text = (result.Warning ? "\u8b66\u544a" : result.Success ? "\u6210\u529f" : "\u5931\u8d25") + $" {result.DurationSeconds:F1}s";
                     RenderRepoItem(item);
                 }
 
@@ -2522,6 +2602,7 @@ namespace GitBranchSwitcher {
                     targetRepos,
                     target,
                     _settings.StashOnSwitch,
+                    _settings.StashOnSwitch && _settings.ReapplyStashOnSwitch,
                     _settings.FastMode,
                     _settings.EnableGitOperationTimeout,
                     _settings.GitOperationTimeoutSeconds,
@@ -2728,7 +2809,36 @@ namespace GitBranchSwitcher {
             return sb.ToString().Trim();
         }
 
-        private void Log(string s) => txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}\r\n");
+        private static Color GetLogColor(string text) {
+            if (string.IsNullOrWhiteSpace(text))
+                return Color.Black;
+
+            if (text.Contains("⚠️", StringComparison.Ordinal)
+                || text.Contains("warning", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("警告", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("stash apply 失败", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("Abort", StringComparison.OrdinalIgnoreCase))
+                return Color.Goldenrod;
+
+            if (text.Contains("❌", StringComparison.Ordinal)
+                || text.Contains("Error", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("fatal", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("失败", StringComparison.OrdinalIgnoreCase))
+                return Color.Crimson;
+
+            return Color.Black;
+        }
+
+        private void Log(string s) {
+            string line = $"[{DateTime.Now:HH:mm:ss}] {s}{Environment.NewLine}";
+            int start = txtLog.TextLength;
+            txtLog.AppendText(line);
+            txtLog.Select(start, line.Length);
+            txtLog.SelectionColor = GetLogColor(s);
+            txtLog.Select(txtLog.TextLength, 0);
+            txtLog.SelectionColor = txtLog.ForeColor;
+            txtLog.ScrollToCaret();
+        }
 
         private async void StartSuperSlimProcess() {
             if (MessageBox.Show("【一键瘦身】将执行深度 GC，非常耗时。\n建议下班挂机执行。是否继续？", "确认 (1/2)", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)

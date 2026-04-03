@@ -17,6 +17,7 @@ namespace GitBranchSwitcher {
 
     public class AppSettings {
         public bool StashOnSwitch { get; set; } = true;
+        public bool ReapplyStashOnSwitch { get; set; } = true;
         public bool FastMode { get; set; } = false;
         public bool ConfirmOnSwitch { get; set; } = false;
         public int MaxParallel { get; set; } = 16;

@@ -6,6 +6,13 @@ using System.Linq;
 using System.Text;
 
 namespace GitBranchSwitcher {
+    public class SwitchAndPullResult {
+        public bool ok { get; set; }
+        public bool warning { get; set; }
+        public string message { get; set; } = "";
+        public string statusText { get; set; } = "";
+    }
+
     public static class GitHelper {
         
         public class FileChangeItem
@@ -182,6 +189,51 @@ namespace GitBranchSwitcher {
             var (code, stdout, _) = RunGit(repoPath, "status --porcelain", timeoutMs);
             return code == 0 && !string.IsNullOrWhiteSpace(stdout);
         }
+
+        private static string? FindStashRefByMarker(string repoPath, string marker, int timeoutMs) {
+            var (code, stdout, _) = RunGit(repoPath, "stash list --format=%gd%x09%s", timeoutMs);
+            if (code != 0 || string.IsNullOrWhiteSpace(stdout))
+                return null;
+
+            foreach (var line in stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) {
+                int splitIndex = line.IndexOf('\t');
+                if (splitIndex <= 0)
+                    continue;
+
+                string stashRef = line[..splitIndex].Trim();
+                string stashMessage = line[(splitIndex + 1)..].Trim();
+                if (stashMessage.Contains(marker, StringComparison.Ordinal))
+                    return stashRef;
+            }
+
+            return null;
+        }
+
+        private static bool AbortStashApply(
+            Func<string, int, (int code, string stdout, string stderr)> runGit,
+            Func<int> resolveTimeout,
+            Action<string> log) {
+            log("> reset --hard HEAD");
+            var resetRes = runGit("reset --hard HEAD", resolveTimeout());
+            if (resetRes.code != 0) {
+                string err = string.IsNullOrWhiteSpace(resetRes.stderr) ? resetRes.stdout : resetRes.stderr;
+                log($"⚠️ Abort 失败: reset --hard HEAD 失败: {err}");
+                return false;
+            }
+
+            log("> clean -fd");
+            var cleanRes = runGit("clean -fd", resolveTimeout());
+            if (cleanRes.code != 0) {
+                string err = string.IsNullOrWhiteSpace(cleanRes.stderr) ? cleanRes.stdout : cleanRes.stderr;
+                log($"⚠️ Abort 失败: clean -fd 失败: {err}");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string FormatStashHint(string? stashRef) =>
+            string.IsNullOrWhiteSpace(stashRef) ? "stash 已保留" : $"stash 已保留: {stashRef}";
 
         private static void WriteConsoleLog(string message) {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
@@ -394,6 +446,169 @@ namespace GitBranchSwitcher {
 
             AddLog("OK");
             return (true, log.ToString());
+        }
+
+        public static SwitchAndPullResult SwitchAndPull(
+            string repoPath,
+            string targetBranch,
+            bool useStash,
+            bool reapplyStash,
+            bool fastMode,
+            bool enableOperationTimeout,
+            int operationTimeoutSeconds,
+            Func<string, string, bool>? confirmLockRecovery = null,
+            Action<string>? liveLogger = null) {
+            var log = new StringBuilder();
+            void AddLog(string s) {
+                log.AppendLine(s);
+                liveLogger?.Invoke(s);
+            }
+            void Step(string s) => AddLog(s);
+
+            int configuredTimeoutMs = enableOperationTimeout
+                ? Math.Max(1, operationTimeoutSeconds) * 1000
+                : -1;
+            int ResolveTimeout() => enableOperationTimeout ? configuredTimeoutMs : -1;
+
+            (int code, string stdout, string stderr) RunSwitchGit(string args, int timeoutMs) =>
+                RunGitWithLockRecovery(repoPath, args, timeoutMs, confirmLockRecovery, Step);
+
+            SwitchAndPullResult Fail(string message, string? statusText = null) {
+                AddLog(message);
+                return new SwitchAndPullResult {
+                    ok = false,
+                    warning = false,
+                    message = log.ToString(),
+                    statusText = statusText ?? ""
+                };
+            }
+
+            SwitchAndPullResult Warn(string message, string statusText) {
+                AddLog(message);
+                return new SwitchAndPullResult {
+                    ok = true,
+                    warning = true,
+                    message = log.ToString(),
+                    statusText = statusText
+                };
+            }
+
+            SwitchAndPullResult Success() {
+                AddLog("OK");
+                return new SwitchAndPullResult {
+                    ok = true,
+                    warning = false,
+                    message = log.ToString(),
+                    statusText = ""
+                };
+            }
+
+            if (fastMode)
+                Step("> [极速模式] 跳过 Fetch");
+            else {
+                Step($"> 尝试快速拉取 origin {targetBranch}...");
+                var fetchRes = RunSwitchGit($"fetch origin {targetBranch} --no-tags --prune --no-progress", ResolveTimeout());
+                if (fetchRes.code != 0) {
+                    Step("⚠️ 快速拉取失败，尝试全量拉取...");
+                    RunSwitchGit("fetch --all --tags --prune --no-progress", ResolveTimeout());
+                }
+            }
+
+            bool stashed = false;
+            string? autoStashRef = null;
+            if (useStash) {
+                if (HasLocalChanges(repoPath, ResolveTimeout())) {
+                    string stashMarker = $"GitBranchSwitcher-auto-{DateTime.Now:yyyyMMddHHmmssfff}";
+                    Step("> stash push...");
+                    var stashRes = RunSwitchGit($"stash push -u -m \"{stashMarker}\"", ResolveTimeout());
+                    if (stashRes.code != 0) {
+                        string err = string.IsNullOrWhiteSpace(stashRes.stderr) ? stashRes.stdout : stashRes.stderr;
+                        return Fail($"❌ Stash失败: {err}");
+                    }
+
+                    stashed = true;
+                    autoStashRef = FindStashRefByMarker(repoPath, stashMarker, ResolveTimeout());
+                }
+            } else {
+                Step("> 强制清理工作区...");
+                RunSwitchGit("reset --hard", ResolveTimeout());
+                if (!fastMode)
+                    RunSwitchGit("clean -fd", ResolveTimeout());
+            }
+
+            bool localExists = RunSwitchGit($"show-ref --verify --quiet refs/heads/{targetBranch}", ResolveTimeout()).code == 0;
+            if (localExists) {
+                Step($"> checkout -f \"{targetBranch}\"");
+                var checkoutRes = RunSwitchGit($"checkout -f \"{targetBranch}\"", ResolveTimeout());
+                if (checkoutRes.code != 0) {
+                    string err = string.IsNullOrWhiteSpace(checkoutRes.stderr) ? checkoutRes.stdout : checkoutRes.stderr;
+                    string stashHint = stashed ? $"；{FormatStashHint(autoStashRef)}" : "";
+                    return Fail($"checkout 失败: {err}{stashHint}");
+                }
+            } else {
+                if (fastMode)
+                    RunSwitchGit($"fetch origin {targetBranch} --no-tags", ResolveTimeout());
+
+                bool remoteExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", ResolveTimeout()).code == 0;
+                if (!remoteExists)
+                    return Fail($"❌ 分支不存在: {targetBranch}");
+
+                if (!useStash)
+                    RunSwitchGit("reset --hard", ResolveTimeout());
+
+                Step("> checkout -B (new track)");
+                var createRes = RunSwitchGit($"checkout -B \"{targetBranch}\" \"origin/{targetBranch}\"", ResolveTimeout());
+                if (createRes.code != 0) {
+                    string err = string.IsNullOrWhiteSpace(createRes.stderr) ? createRes.stdout : createRes.stderr;
+                    string stashHint = stashed ? $"；{FormatStashHint(autoStashRef)}" : "";
+                    return Fail($"创建分支失败: {err}{stashHint}");
+                }
+            }
+
+            if (!fastMode) {
+                bool remoteTrackingExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", ResolveTimeout()).code == 0;
+                if (remoteTrackingExists) {
+                    if (!useStash) {
+                        Step($"> [强制模式] Reset to origin/{targetBranch}...");
+                        var resetRes = RunSwitchGit($"reset --hard origin/{targetBranch}", ResolveTimeout());
+                        if (resetRes.code != 0) {
+                            string err = string.IsNullOrWhiteSpace(resetRes.stderr) ? resetRes.stdout : resetRes.stderr;
+                            return Fail($"❌ 强制同步失败: {err}");
+                        }
+                    } else {
+                        Step("> 尝试同步 (Fast-forward)...");
+                        var mergeRes = RunSwitchGit($"merge --ff-only origin/{targetBranch}", ResolveTimeout());
+                        if (mergeRes.code != 0) {
+                            AddLog("❌ 同步失败: 本地分支与远程分叉，无法快进。");
+                            string err = string.IsNullOrWhiteSpace(mergeRes.stderr) ? mergeRes.stdout : mergeRes.stderr;
+                            return Fail($"原因: {err}");
+                        }
+                    }
+                }
+            }
+
+            if (useStash && reapplyStash && stashed) {
+                if (string.IsNullOrWhiteSpace(autoStashRef))
+                    return Warn("⚠️ 找不到本次自动 stash，已跳过 reapply，stash 已保留。", "reapply 已跳过");
+
+                Step($"> stash apply --index \"{autoStashRef}\"");
+                var applyRes = RunSwitchGit($"stash apply --index \"{autoStashRef}\"", ResolveTimeout());
+                if (applyRes.code != 0) {
+                    AddLog("⚠️ stash apply 失败，正在 Abort，本次不 reapply，stash 不删除。");
+                    bool abortOk = AbortStashApply(RunSwitchGit, ResolveTimeout, AddLog);
+                    if (!abortOk)
+                        return Warn($"⚠️ stash apply 失败，Abort 未完全成功，请手动处理；{FormatStashHint(autoStashRef)}。", "stash apply 失败");
+
+                    return Warn($"⚠️ stash apply 失败，已 Abort，本次不 reapply；{FormatStashHint(autoStashRef)}。", "stash apply 失败");
+                }
+
+                Step($"> stash drop \"{autoStashRef}\"");
+                var dropRes = RunSwitchGit($"stash drop \"{autoStashRef}\"", ResolveTimeout());
+                if (dropRes.code != 0)
+                    return Warn($"⚠️ stash 已应用，但删除 stash 失败；{FormatStashHint(autoStashRef)}。", "stash drop 失败");
+            }
+
+            return Success();
         }
 
         public static(bool ok, string message) PullCurrentBranch(string repoPath) {
