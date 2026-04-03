@@ -77,6 +77,7 @@ namespace GitBranchSwitcher {
         private CancellationTokenSource? _parentBranchRefreshCts;
         private CancellationTokenSource? _switchPostProcessCts;
         private int _loadSeq = 0;
+        private bool _isUpdatingTargetBranchDropdown = false;
         private bool _suppressParentItemCheck = false;
         private HashSet<string> _checkedParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private GitWorkflowService _workflowService;
@@ -414,7 +415,7 @@ namespace GitBranchSwitcher {
                 for (int i = 0; i < lbParents.Items.Count; i++)
                     lbParents.SetItemChecked(i, targetState);
                 _suppressParentItemCheck = false;
-                QueueLoadReposForCheckedParents(forceRescan: !targetState, includeRepoDetails: false, refreshBranchCatalog: false, autoFetchAfterLoad: false, debounceMs: 0);
+                QueueLoadReposForCheckedParents(forceRescan: !targetState, includeRepoDetails: false, refreshBranchCatalog: targetState, autoFetchAfterLoad: false, debounceMs: 0);
             };
             lbParents.ItemCheck += (_, e) => { if (_suppressParentItemCheck) return;
                 // [修改] 从对象中获取 Path，而不是直接 ToString
@@ -428,7 +429,7 @@ namespace GitBranchSwitcher {
                         _checkedParents.Add(p);
                     else
                         _checkedParents.Remove(p);
-                    await LoadReposForCheckedParentsAsync(false);
+                    await LoadReposForCheckedParentsAsync(false, includeRepoDetails: true, refreshBranchCatalog: true, autoFetchAfterLoad: false);
                 }));
             };
             splitUpper.Panel1.Controls.Add(grpTop);
@@ -684,7 +685,7 @@ namespace GitBranchSwitcher {
                 Height = 28, Dock = DockStyle.Top, Padding = new Padding(0, 0, 0, 2)
             };
             cmbTargetBranch = new ComboBox {
-                Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDown
+                Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDown, IntegralHeight = false, MaxDropDownItems = 15
             };
             
             // === [开始修改] ===
@@ -873,9 +874,15 @@ namespace GitBranchSwitcher {
                 } else
                     MessageBox.Show("无效分支");
             };
-            cmbTargetBranch.TextUpdate += (_, __) => {
+            cmbTargetBranch.TextChanged += (_, __) => {
                 try {
-                    UpdateBranchDropdown();
+                    UpdateBranchDropdown(openDropdown: cmbTargetBranch.Focused);
+                } catch {
+                }
+            };
+            cmbTargetBranch.DropDown += (_, __) => {
+                try {
+                    UpdateBranchDropdown(openDropdown: false);
                 } catch {
                 }
             };
@@ -1636,10 +1643,14 @@ namespace GitBranchSwitcher {
             lvRepos.Items.Clear();
             lvRepos.EndUpdate();
             _repos.Clear();
-            _allBranches.Clear();
-            cmbTargetBranch.Items.Clear();
             var parents = _checkedParents.Where(Directory.Exists).ToList();
+            if (refreshBranchCatalog) {
+                _allBranches.Clear();
+                cmbTargetBranch.Items.Clear();
+            }
             if (!parents.Any()) {
+                _allBranches.Clear();
+                cmbTargetBranch.Items.Clear();
                 statusLabel.Text = "就绪";
                 SetSwitchState(SwitchState.NotStarted);
                 return;
@@ -1841,28 +1852,43 @@ namespace GitBranchSwitcher {
                 UpdateBranchDropdown();
         }
 
-        private void UpdateBranchDropdown() {
+        private void UpdateBranchDropdown(bool openDropdown = true) {
             try {
-                if (cmbTargetBranch == null || cmbTargetBranch.IsDisposed)
+                if (cmbTargetBranch == null || cmbTargetBranch.IsDisposed || _isUpdatingTargetBranchDropdown)
                     return;
                 string currentText = cmbTargetBranch.Text;
-                cmbTargetBranch.BeginUpdate();
-                cmbTargetBranch.Items.Clear();
+                int selectionStart = cmbTargetBranch.SelectionStart;
+                int selectionLength = cmbTargetBranch.SelectionLength;
                 var src = _allBranches?.ToList() ?? new List<string>();
                 var list = string.IsNullOrEmpty(currentText)? src : src.Where(b => b != null && b.IndexOf(currentText, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
-                foreach (var b in list.Take(500))
-                    cmbTargetBranch.Items.Add(b);
-                cmbTargetBranch.EndUpdate();
-                cmbTargetBranch.Text = currentText;
-                if (!string.IsNullOrEmpty(currentText)) {
-                    cmbTargetBranch.SelectionStart = currentText.Length;
+                var suggestions = list.Take(500).Cast<object>().ToArray();
+
+                _isUpdatingTargetBranchDropdown = true;
+                cmbTargetBranch.BeginUpdate();
+                try {
+                    cmbTargetBranch.Items.Clear();
+                    cmbTargetBranch.Items.AddRange(suggestions);
+                    if (!string.Equals(cmbTargetBranch.Text, currentText, StringComparison.Ordinal))
+                        cmbTargetBranch.Text = currentText;
+                    if (selectionStart >= 0) {
+                        int safeStart = Math.Min(selectionStart, cmbTargetBranch.Text.Length);
+                        int safeLength = Math.Min(selectionLength, cmbTargetBranch.Text.Length - safeStart);
+                        cmbTargetBranch.SelectionStart = safeStart;
+                        cmbTargetBranch.SelectionLength = Math.Max(0, safeLength);
+                    }
+                } finally {
+                    cmbTargetBranch.EndUpdate();
+                    _isUpdatingTargetBranchDropdown = false;
                 }
 
-                if (list.Count > 0 && cmbTargetBranch.Focused && !string.IsNullOrEmpty(currentText)) {
-                    cmbTargetBranch.DroppedDown = true;
+                bool shouldOpen = openDropdown && cmbTargetBranch.Focused && suggestions.Length > 0 && !string.IsNullOrEmpty(currentText);
+                if (cmbTargetBranch.DroppedDown != shouldOpen)
+                    cmbTargetBranch.DroppedDown = shouldOpen;
+                if (shouldOpen) {
                     Cursor.Current = Cursors.Default;
                 }
             } catch {
+                _isUpdatingTargetBranchDropdown = false;
             }
         }
 
