@@ -480,7 +480,7 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnRank);
 #endif
             repoToolbar.Controls.Add(btnSuperSlim);
-            
+
             // [新增] 将设置按钮加在瘦身按钮后面
             repoToolbar.Controls.Add(btnSettings);
 
@@ -492,11 +492,11 @@ namespace GitBranchSwitcher {
                 CheckBoxes = true,
                 BorderStyle = BorderStyle.FixedSingle
             };
-            lvRepos.Columns.Add("状态", 50);
+            lvRepos.Columns.Add("状态", 60);
             lvRepos.Columns.Add("当前分支", 240);
-            lvRepos.Columns.Add("同步", 90);
-            lvRepos.Columns.Add("仓库名", 180);
-            lvRepos.Columns.Add("路径", 400);
+            lvRepos.Columns.Add("同步", 110);
+            lvRepos.Columns.Add("仓库名", 220);
+            lvRepos.Columns.Add("路径", 450);
             try {
                 var prop = typeof(Control).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 prop?.SetValue(lvRepos, true, null);
@@ -1825,11 +1825,17 @@ namespace GitBranchSwitcher {
         private async Task RefreshBranchesAsync(CancellationToken token = default) {
             if (lvRepos == null || lvRepos.IsDisposed || lvRepos.Items.Count == 0)
                 return;
-            var targetPaths = new List<string>();
-            foreach (ListViewItem item in lvRepos.Items) {
-                if (item.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
-                    targetPaths.Add(r.Path);
-            }
+            var checkedPaths = lvRepos.Items.Cast<ListViewItem>()
+                .Where(i => i.Checked && i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                .Select(i => ((GitRepo)i.Tag).Path)
+                .ToList();
+            // 只选了一个仓库用它的分支列表，否则用第一个勾选仓库的分支列表
+            var targetPaths = checkedPaths.Count > 0
+                ? new List<string> { checkedPaths[0] }
+                : lvRepos.Items.Cast<ListViewItem>()
+                    .Where(i => i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                    .Select(i => ((GitRepo)i.Tag).Path)
+                    .Take(1).ToList();
 
             var all = new HashSet<string>();
             var tasks = new List<Task<IEnumerable<string>>>();

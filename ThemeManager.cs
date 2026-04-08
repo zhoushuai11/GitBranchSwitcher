@@ -145,12 +145,15 @@ namespace GitBranchSwitcher {
                     lv.ForeColor = TextPrimary;
                     lv.GridLines = false;
                     lv.BorderStyle = BorderStyle.None;
-                    // Owner-draw so we can render dark column headers
+                    // Owner-draw lets us paint each defined column header dark.
+                    // ListViewHeaderDarkBg hooks the header child HWND's WM_ERASEBKGND
+                    // to fill the overflow area (right of last column) with BgSurface too.
                     lv.OwnerDraw = true;
                     lv.DrawColumnHeader -= OnListViewDrawColumnHeader;
                     lv.DrawColumnHeader += OnListViewDrawColumnHeader;
                     lv.DrawItem        += (s, e) => e.DrawDefault = true;
                     lv.DrawSubItem     += (s, e) => e.DrawDefault = true;
+                    _ = new ListViewHeaderDarkBg(lv, BgSurface);
                     return;
 
                 case CheckedListBox clb:
@@ -550,29 +553,96 @@ namespace GitBranchSwitcher {
             [DllImport("gdi32.dll")] private static extern bool   DeleteObject(IntPtr h);
         }
 
-        // ── ListView: dark column headers ─────────────────────────────────────
+        // ── ListView: dark column headers (owner-draw) ────────────────────────
 
         private static void OnListViewDrawColumnHeader(object? sender, DrawListViewColumnHeaderEventArgs e) {
             var g = e.Graphics;
-            // Dark header background
             using var bgBrush = new SolidBrush(BgSurface);
             g.FillRectangle(bgBrush, e.Bounds);
 
-            // Right-edge column divider
             using var divPen = new Pen(BorderColor, 1f);
             g.DrawLine(divPen, e.Bounds.Right - 1, e.Bounds.Top + 3,
                                e.Bounds.Right - 1, e.Bounds.Bottom - 3);
-
-            // Bottom separator line
             g.DrawLine(divPen, e.Bounds.Left, e.Bounds.Bottom - 1,
                                e.Bounds.Right, e.Bounds.Bottom - 1);
 
-            // Header label
             var textRect = new Rectangle(e.Bounds.X + 6, e.Bounds.Y,
                                           e.Bounds.Width - 8, e.Bounds.Height);
-            TextRenderer.DrawText(g, e.Header.Text, e.Font, textRect, TextSecondary,
+            TextRenderer.DrawText(g, e.Header?.Text ?? "", e.Font, textRect, TextSecondary,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.Left |
                 TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+        }
+
+        // ── ListView header overflow area: paint dark after WM_PAINT ─────────
+        //
+        // When OwnerDraw = true, DrawColumnHeader fires only for defined columns.
+        // The area to the right of the last column is painted natively (white).
+        // We hook the header child HWND and, after base WM_PAINT completes,
+        // calculate where the columns end and paint the overflow area dark.
+
+        private sealed class ListViewHeaderDarkBg : NativeWindow {
+            private const int WM_PAINT      = 0x000F;
+            private const int WM_NCDESTROY  = 0x0082;
+            private const int LVM_GETHEADER = 0x101F;
+            private const int SB_HORZ       = 0;
+
+            private readonly ListView _lv;
+            private readonly Color    _bg;
+
+            internal ListViewHeaderDarkBg(ListView lv, Color bg) {
+                _lv = lv;
+                _bg = bg;
+
+                void Attach() {
+                    if (!lv.IsHandleCreated || Handle != IntPtr.Zero) return;
+                    IntPtr hdr = SendMsg(lv.Handle, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero);
+                    if (hdr != IntPtr.Zero) AssignHandle(hdr);
+                }
+
+                if (lv.IsHandleCreated) Attach();
+                else lv.HandleCreated += (_, __) => Attach();
+
+                lv.HandleDestroyed += (_, __) => { if (Handle != IntPtr.Zero) ReleaseHandle(); };
+            }
+
+            protected override void WndProc(ref Message m) {
+                base.WndProc(ref m); // let Windows draw columns via WM_DRAWITEM first
+                if (m.Msg == WM_PAINT)     PaintOverflow();
+                if (m.Msg == WM_NCDESTROY && Handle != IntPtr.Zero) ReleaseHandle();
+            }
+
+            private void PaintOverflow() {
+                if (_lv == null || _lv.IsDisposed || Handle == IntPtr.Zero) return;
+
+                // Sum all column widths to find where defined columns end
+                int totalColWidth = 0;
+                foreach (ColumnHeader col in _lv.Columns)
+                    totalColWidth += col.Width;
+
+                // Horizontal scroll offset of the ListView
+                int scrollX = GetScrollPos(_lv.Handle, SB_HORZ);
+
+                // Where the overflow starts in header-local coordinates
+                int overflowX = totalColWidth - scrollX;
+
+                if (!GetClientRect(Handle, out RECT rc)) return;
+                if (overflowX >= rc.right) return; // overflow not visible
+                if (overflowX < 0) overflowX = 0;
+
+                // Paint over the white overflow area
+                using var g = Graphics.FromHwnd(Handle);
+                using var brush = new SolidBrush(_bg);
+                g.FillRectangle(brush, overflowX, rc.top,
+                                rc.right - overflowX, rc.bottom - rc.top);
+            }
+
+            [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+            private struct RECT { public int left, top, right, bottom; }
+
+            [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+            private static extern IntPtr SendMsg(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+            [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+            [DllImport("user32.dll")] private static extern int  GetScrollPos(IntPtr hWnd, int nBar);
         }
     }
 }
