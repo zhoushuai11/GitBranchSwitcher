@@ -56,13 +56,16 @@ namespace GitBranchSwitcher {
             }
 
             _flowPanel = new FlowLayoutPanel {
-                Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(15), BackColor = Color.FromArgb(240, 240, 240)
+                Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(15),
+                BackColor = _settings.DarkMode ? ThemeManager.BgBase : SystemColors.Control
             };
             Controls.Add(_flowPanel);
 
             this.Resize += (s, e) => {
                 _flowPanel.Padding = this.Width < 500? new Padding(5) : new Padding(15);
             };
+
+            if (_settings.DarkMode) ThemeManager.Apply(this);
         }
 
         private void LoadCollection() {
@@ -116,12 +119,12 @@ namespace GitBranchSwitcher {
             Control contentControl;
 
             if (item.IsCollected) {
-                panel.BackColor = Color.White;
+                panel.BackColor = _settings.DarkMode ? ThemeManager.BgPanel : Color.White;
                 var pb = new PictureBox {
                     Dock = DockStyle.Top,
                     Height = 135,
                     SizeMode = PictureBoxSizeMode.Zoom,
-                    BackColor = Color.White,
+                    BackColor = _settings.DarkMode ? ThemeManager.BgPanel : Color.White,
                     Cursor = Cursors.Hand
                 };
                 try {
@@ -141,14 +144,14 @@ namespace GitBranchSwitcher {
                 tt.SetToolTip(pb, item.Name);
                 contentControl = pb;
             } else {
-                panel.BackColor = Color.FromArgb(224, 224, 224);
+                panel.BackColor = _settings.DarkMode ? ThemeManager.BgSurface : Color.FromArgb(224, 224, 224);
                 var lblUnknown = new Label {
                     Dock = DockStyle.Top,
                     Height = 135,
                     Text = "我是谁？",
                     TextAlign = ContentAlignment.MiddleCenter,
                     Font = new Font("Segoe UI", 12, FontStyle.Italic),
-                    ForeColor = Color.Gray,
+                    ForeColor = _settings.DarkMode ? ThemeManager.TextDisabled : Color.Gray,
                     BackColor = Color.Transparent
                 };
                 contentControl = lblUnknown;
@@ -158,7 +161,7 @@ namespace GitBranchSwitcher {
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI", 8, item.IsCollected? FontStyle.Bold : FontStyle.Regular),
-                ForeColor = item.IsCollected? rarityColor : Color.DimGray,
+                ForeColor = item.IsCollected ? rarityColor : (_settings.DarkMode ? ThemeManager.TextSecondary : Color.DimGray),
                 Text = item.IsCollected? $"{Path.GetFileNameWithoutExtension(item.Name)}\n[{item.Rarity}]" : $"???\n[{item.Rarity}]"
             };
 

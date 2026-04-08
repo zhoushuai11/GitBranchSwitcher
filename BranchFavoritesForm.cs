@@ -76,6 +76,8 @@ namespace GitBranchSwitcher
 
             this.Controls.Add(_lbBranches);
             this.Controls.Add(pnlBottom);
+
+            if (_settings.DarkMode) ThemeManager.Apply(this);
         }
 
         // === 核心逻辑：自绘列表项 ===
@@ -86,18 +88,28 @@ namespace GitBranchSwitcher
             var item = _settings.FavoriteBranches[e.Index];
             
             // 1. 绘制背景
-            e.DrawBackground();
             bool isSelected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
-            
+            bool isDark = _settings.DarkMode;
+            Color bgNormal   = isDark ? ThemeManager.BgPanel   : SystemColors.Window;
+            Color bgSelected = isDark ? ThemeManager.AccentBlue : SystemColors.Highlight;
+            using var bgBrush = new SolidBrush(isSelected ? bgSelected : bgNormal);
+            e.Graphics.FillRectangle(bgBrush, e.Bounds);
+
             // 定义画笔和字体
-            Brush textBrush = isSelected ? Brushes.White : Brushes.Black;
-            Brush remarkBrush = isSelected ? Brushes.LightGray : Brushes.Gray;
+            Color textColor   = isDark ? ThemeManager.TextPrimary   : (isSelected ? Color.White : SystemColors.WindowText);
+            Color remarkColor = isDark ? ThemeManager.TextSecondary  : (isSelected ? Color.LightGray : Color.Gray);
+            Color disabledFg  = isDark ? ThemeManager.TextDisabled   : Color.Silver;
+            using var textBrush    = new SolidBrush(textColor);
+            using var remarkBrush  = new SolidBrush(remarkColor);
+            using var disabledBrush = new SolidBrush(disabledFg);
+            Brush tb = textBrush;
+            Brush rb = remarkBrush;
             
             using (var fontTitle = new Font("Segoe UI", 11, FontStyle.Bold))
             using (var fontRemark = new Font("Segoe UI", 9, FontStyle.Regular))
             {
                 // 2. 绘制分支名称 (第一行)
-                e.Graphics.DrawString(item.Branch, fontTitle, textBrush, e.Bounds.X + 5, e.Bounds.Y + 5);
+                e.Graphics.DrawString(item.Branch, fontTitle, tb, e.Bounds.X + 5, e.Bounds.Y + 5);
 
                 // 3. 绘制备注 (后面) - 如果有备注
                 if (!string.IsNullOrEmpty(item.Remark))
@@ -105,17 +117,17 @@ namespace GitBranchSwitcher
                     string remarkText = $"📝 {item.Remark}";
                     // 也可以选择绘制在第二行，这里示例绘制在名称后面或下方
                     // 方案A：绘制在名称下方 (更整齐)
-                    e.Graphics.DrawString(remarkText, fontRemark, remarkBrush, e.Bounds.X + 5, e.Bounds.Y + 24);
+                    e.Graphics.DrawString(remarkText, fontRemark, rb, e.Bounds.X + 5, e.Bounds.Y + 24);
                 }
-                else 
+                else
                 {
                     // 如果没备注，显示提示
-                    e.Graphics.DrawString("(无备注)", fontRemark, Brushes.LightGray, e.Bounds.X + 5, e.Bounds.Y + 24);
+                    e.Graphics.DrawString("(无备注)", fontRemark, disabledBrush, e.Bounds.X + 5, e.Bounds.Y + 24);
                 }
             }
 
             // 4. 绘制明显的分割线 (底部)
-            using (var penLine = new Pen(Color.LightGray, 1))
+            using (var penLine = new Pen(isDark ? ThemeManager.BorderColor : Color.LightGray, 1))
             {
                 // 虚线或者实线，这里用实线
                 int y = e.Bounds.Bottom - 1;
@@ -232,6 +244,8 @@ namespace GitBranchSwitcher
                 Controls.AddRange(new Control[] { lbl1, txtBranch, lbl2, txtRemark, btnOk, btnCancel });
                 AcceptButton = btnOk;
                 CancelButton = btnCancel;
+                var s = AppSettings.Load();
+                if (s.DarkMode) ThemeManager.Apply(this);
             }
         }
     }

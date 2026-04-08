@@ -255,6 +255,7 @@ namespace GitBranchSwitcher {
             StartPosition = FormStartPosition.CenterScreen;
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.BackColor = Color.WhiteSmoke;
+            this.ForeColor = SystemColors.ControlText;
         }
         
         private void InitRandomTheme() {
@@ -1124,6 +1125,12 @@ namespace GitBranchSwitcher {
             };
             
             InitMarqueeAnimation();
+
+            // Apply dark theme only when the user has it enabled
+            if (_settings.DarkMode) {
+                ThemeManager.Apply(this);
+                ThemeManager.Apply(consoleWindow);
+            }
         }
 
         // ... (SeedParentsToUi, RenderRepoItem, BatchSyncStatusUpdate 等逻辑) ...
@@ -1333,18 +1340,20 @@ namespace GitBranchSwitcher {
             var repo = (GitRepo)item.Tag;
             item.SubItems[1].Text = repo.CurrentBranch;
             item.UseItemStyleForSubItems = false;
-            Color defaultTextColor = Color.Black;
+
+            bool dark = _settings.DarkMode;
+            Color defaultTextColor = dark ? ThemeManager.TextPrimary : Color.Black;
             item.BackColor = lvRepos.BackColor;
             item.SubItems[0].ForeColor = defaultTextColor;
             item.SubItems[0].Font = item.Font;
 
             if (repo.IsDirty)
-                item.SubItems[1].ForeColor = Color.ForestGreen;
+                item.SubItems[1].ForeColor = dark ? ThemeManager.AccentGreen : Color.ForestGreen;
             else
                 item.SubItems[1].ForeColor = defaultTextColor;
 
             string syncText = "";
-            Color syncColor = Color.Gray;
+            Color syncColor = dark ? ThemeManager.TextSecondary : Color.Gray;
             Font syncFont = item.Font;
 
             if (repo.IsSwitching) {
@@ -1352,38 +1361,38 @@ namespace GitBranchSwitcher {
                     ? Math.Max(0, (DateTime.Now - repo.SwitchStartedAt.Value).TotalSeconds)
                     : 0;
                 item.Text = $"\u5207\u7ebf\u4e2d {elapsedSeconds:F0}s";
-                item.SubItems[0].ForeColor = Color.DarkOrange;
+                item.SubItems[0].ForeColor = dark ? ThemeManager.AccentYellow : Color.DarkOrange;
                 item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = Color.FromArgb(255, 248, 220);
+                item.BackColor = dark ? Color.FromArgb(0x38, 0x28, 0x00) : Color.FromArgb(255, 248, 220);
                 syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u5207\u7ebf\u4e2d" : repo.LiveStatus;
-                syncColor = Color.DarkOrange;
+                syncColor = dark ? ThemeManager.AccentYellow : Color.DarkOrange;
                 syncFont = new Font(item.Font, FontStyle.Bold);
             } else if (repo.IsSwitchQueued) {
                 item.Text = "\u6392\u961f\u4e2d";
-                item.SubItems[0].ForeColor = Color.SteelBlue;
+                item.SubItems[0].ForeColor = dark ? ThemeManager.AccentBlue : Color.SteelBlue;
                 item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = Color.FromArgb(240, 248, 255);
+                item.BackColor = dark ? Color.FromArgb(0x08, 0x1C, 0x38) : Color.FromArgb(240, 248, 255);
                 syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u7b49\u5f85" : repo.LiveStatus;
-                syncColor = Color.SteelBlue;
+                syncColor = dark ? ThemeManager.AccentBlue : Color.SteelBlue;
                 syncFont = new Font(item.Font, FontStyle.Bold);
             } else if (repo.SwitchSeverity == RepoSwitchSeverity.Warning) {
-                item.SubItems[0].ForeColor = Color.Goldenrod;
+                item.SubItems[0].ForeColor = dark ? ThemeManager.AccentYellow : Color.Goldenrod;
                 item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = Color.FromArgb(255, 251, 235);
+                item.BackColor = dark ? Color.FromArgb(0x2C, 0x22, 0x00) : Color.FromArgb(255, 251, 235);
                 syncText = string.IsNullOrWhiteSpace(repo.SwitchStatusText) ? "stash apply \u5931\u8d25" : repo.SwitchStatusText;
-                syncColor = Color.Goldenrod;
+                syncColor = dark ? ThemeManager.AccentYellow : Color.Goldenrod;
                 syncFont = new Font(item.Font, FontStyle.Bold);
             } else if (!repo.SwitchOk && !string.IsNullOrWhiteSpace(repo.LastMessage)) {
-                item.SubItems[0].ForeColor = Color.Crimson;
+                item.SubItems[0].ForeColor = dark ? ThemeManager.AccentRed : Color.Crimson;
                 item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = Color.FromArgb(255, 240, 240);
+                item.BackColor = dark ? Color.FromArgb(0x32, 0x08, 0x08) : Color.FromArgb(255, 240, 240);
                 syncText = SummarizeSwitchFailure(repo.LastMessage);
-                syncColor = Color.Crimson;
+                syncColor = dark ? ThemeManager.AccentRed : Color.Crimson;
                 syncFont = new Font(item.Font, FontStyle.Bold);
             } else if (repo.IsSyncChecked) {
                 if (!repo.HasUpstream) {
                     syncText = "\u65e0\u8fdc\u7a0b";
-                    syncColor = Color.Gray;
+                    syncColor = dark ? ThemeManager.TextDisabled : Color.Gray;
                 } else if (repo.Incoming == 0 && repo.Outgoing == 0) {
                     syncText = "\u5c31\u7eea";
                     syncColor = defaultTextColor;
@@ -1397,11 +1406,11 @@ namespace GitBranchSwitcher {
                         sb.Add($"\u2191 {repo.Outgoing}");
                     syncText = string.Join(" ", sb);
                     if (hasPush && hasPull)
-                        syncColor = Color.Red;
+                        syncColor = dark ? ThemeManager.AccentRed : Color.Red;
                     else if (hasPull)
-                        syncColor = Color.Green;
+                        syncColor = dark ? ThemeManager.AccentGreen : Color.Green;
                     else if (hasPush)
-                        syncColor = Color.Red;
+                        syncColor = dark ? ThemeManager.AccentRed : Color.Red;
                     syncFont = new Font(item.Font, FontStyle.Bold);
                 }
             } else {
@@ -1986,6 +1995,7 @@ namespace GitBranchSwitcher {
             });
             form.AcceptButton = btnOk;
             form.CancelButton = btnCancel;
+            if (_settings.DarkMode) ThemeManager.Apply(form);
             if (form.ShowDialog(this) != DialogResult.OK)
                 return false;
 
@@ -2111,6 +2121,7 @@ namespace GitBranchSwitcher {
             });
             form.AcceptButton = btnOk;
             form.CancelButton = btnCancel;
+            if (_settings.DarkMode) ThemeManager.Apply(form);
             return form.ShowDialog(this) == DialogResult.OK;
         }
 
@@ -2927,6 +2938,7 @@ namespace GitBranchSwitcher {
             form.Controls.Add(clb);
             form.Controls.Add(btnOk);
             form.AcceptButton = btnOk;
+            if (_settings.DarkMode) ThemeManager.Apply(form);
             if (form.ShowDialog() == DialogResult.OK) {
                 var r = new List<string>();
                 foreach (var i in clb.CheckedItems)
@@ -2952,8 +2964,8 @@ namespace GitBranchSwitcher {
 
             using var form = new Form {
                 Text = "界面设置",
-                Width = 450, // 稍微加宽以容纳长文件名
-                Height = 400,
+                Width = 450,
+                Height = 430,
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -3077,9 +3089,27 @@ namespace GitBranchSwitcher {
             }
             chkEnableTimeout.CheckedChanged += (_, __) => UpdateTimeoutInputState();
 
+            // === 深色模式开关 ===
+            var lblDivider = new Label {
+                Text = "────────────────────────────",
+                Top = 298,
+                Left = 20,
+                AutoSize = true,
+                ForeColor = Color.Gray
+            };
+            var chkDarkMode = new CheckBox {
+                Text = "深色模式 (Dark Mode) — 重启后生效",
+                Top = 314,
+                Left = 20,
+                Width = 390,
+                Font = new Font("Segoe UI", 10),
+                Checked = _settings.DarkMode,
+                Cursor = Cursors.Hand
+            };
+
             var btnOk = new Button {
                 Text = "💾 保存并应用",
-                Top = 315,
+                Top = 348,
                 Left = 20,
                 Width = 390,
                 Height = 40,
@@ -3092,7 +3122,7 @@ namespace GitBranchSwitcher {
             btnOk.FlatAppearance.BorderSize = 0;
 
             form.Controls.AddRange(new Control[] {
-                lblTheme, cmbThemes, lblColl, cmbCollection, chkEnableTimeout, lblTimeoutSeconds, numTimeoutSeconds, btnOk
+                lblTheme, cmbThemes, lblColl, cmbCollection, chkEnableTimeout, lblTimeoutSeconds, numTimeoutSeconds, lblDivider, chkDarkMode, btnOk
             });
             form.AcceptButton = btnOk;
 
@@ -3102,6 +3132,9 @@ namespace GitBranchSwitcher {
             lblColl.Visible = showColl;
             cmbCollection.Visible = showColl;
             UpdateTimeoutInputState();
+
+            // Apply dark theme to this dynamic dialog
+            if (_settings.DarkMode) ThemeManager.Apply(form);
 
             // === 保存逻辑 ===
             if (form.ShowDialog(this) == DialogResult.OK) {
@@ -3147,13 +3180,22 @@ namespace GitBranchSwitcher {
                     settingsChanged = true;
                 }
 
+                // 3. 保存深色模式
+                bool darkModeChanged = chkDarkMode.Checked != _settings.DarkMode;
+                if (darkModeChanged) {
+                    _settings.DarkMode = chkDarkMode.Checked;
+                    settingsChanged = true;
+                }
+
                 if (settingsChanged) {
                     _settings.Save();
                 }
 
-                if (needApply) {
-                    UpdateThemeLabel(); // 更新状态栏文字
-                    LoadRandomFrameWorkImage(); // 立即刷新图片
+                if (darkModeChanged) {
+                    MessageBox.Show("深色模式设置已保存，重启程序后生效。", "提示");
+                } else if (needApply) {
+                    UpdateThemeLabel();
+                    LoadRandomFrameWorkImage();
                     MessageBox.Show("设置已保存！");
                 } else if (settingsChanged) {
                     MessageBox.Show("设置已保存！");

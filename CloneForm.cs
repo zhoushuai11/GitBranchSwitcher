@@ -121,6 +121,9 @@ namespace GitBranchSwitcher
             mainLayout.Controls.Add(txtLog, 0, 4);
 
             Controls.Add(mainLayout);
+
+            var cfg = AppSettings.Load();
+            if (cfg.DarkMode) ThemeManager.Apply(this);
         }
 
         private void Log(string s) => txtLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {s}\r\n");
