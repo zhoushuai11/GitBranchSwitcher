@@ -23,7 +23,7 @@ namespace GitBranchSwitcher {
         public int MaxParallel { get; set; } = 16;
         public bool EnableGitOperationTimeout { get; set; } = false;
         public int GitOperationTimeoutSeconds { get; set; } = 300;
-        public bool DarkMode { get; set; } = true;
+        public bool DarkMode { get; set; } = false;
 
         public List<string> ParentPaths { get; set; } = new List<string>();
         public List<ParentRepoCache> RepositoryCache { get; set; } = new List<ParentRepoCache>();
