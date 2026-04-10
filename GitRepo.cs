@@ -2,7 +2,8 @@ namespace GitBranchSwitcher {
     public enum RepoSwitchSeverity {
         None,
         Warning,
-        Error
+        Error,
+        Cancelled
     }
 
     public class GitRepo {
@@ -15,6 +16,7 @@ namespace GitBranchSwitcher {
         public string SwitchStatusText { get; set; } = "";
         public bool IsSwitchQueued { get; set; } = false;
         public bool IsSwitching { get; set; } = false;
+        public bool IsFetching { get; set; } = false;
         public System.DateTime? SwitchStartedAt { get; set; }
         public string LiveStatus { get; set; } = "";
 

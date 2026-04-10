@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -14,7 +15,25 @@ namespace GitBranchSwitcher {
     }
 
     public static class GitHelper {
-        
+        // 正在运行的 git 进程注册表，用于支持取消操作
+        private static readonly ConcurrentDictionary<int, Process> _runningProcesses = new();
+        // 取消标志：Cancel 按钮设为 true，下次切线开始前重置
+        private static volatile bool _cancelRequested = false;
+
+        /// <summary>强制终止所有当前正在运行的 git 进程（含子进程）并设置取消标志</summary>
+        public static int CancelAllRunningGitOps() {
+            _cancelRequested = true;
+            int killed = 0;
+            foreach (var kvp in _runningProcesses) {
+                try { kvp.Value.Kill(entireProcessTree: true); killed++; } catch { }
+            }
+            return killed;
+        }
+
+        /// <summary>在下次切线开始前调用，重置取消状态</summary>
+        public static void ResetCancelFlag() => _cancelRequested = false;
+
+        public static bool IsCancelRequested => _cancelRequested;
         public class FileChangeItem
         {
             public string X { get; set; } // 索引状态 (Index/Staged)
@@ -82,26 +101,32 @@ namespace GitBranchSwitcher {
             return set;
         }
 
-        public static void FetchFast(string repoPath) {
-            RunGit(repoPath, "fetch origin --prune --no-tags", 15000);
+        public static void FetchFast(string repoPath, Action<string>? logger = null) {
+            logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] git fetch origin --prune --no-tags");
+            var (code, stdout, stderr) = RunGit(repoPath, "fetch origin --prune --no-tags", 15000);
+            string output = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : !string.IsNullOrWhiteSpace(stdout) ? stdout.Trim() : "OK";
+            logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] {(code == 0 ? "✓" : "✗")} {output}");
         }
-        
+
         // [新增] 极速 Fetch：只拉取当前分支，速度最快
-        public static void FetchCurrentBranch(string repoPath) {
+        public static void FetchCurrentBranch(string repoPath, Action<string>? logger = null) {
             // 1. 获取当前分支名
             string branch = GetFriendlyBranch(repoPath);
 
             // 2. 如果处于游离状态(detached)或异常状态，没法指定分支，只能回退到普通 Fetch
             if (string.IsNullOrEmpty(branch) || branch.Contains("detached") || branch.Contains("unknown") || branch == "HEAD")
             {
-                FetchFast(repoPath);
+                FetchFast(repoPath, logger);
                 return;
             }
 
             // 3. 针对性 Fetch：git fetch origin <branch_name>
             // --no-tags: 不拉取 tag
             // --prune: 清理已删除的分支引用
-            RunGit(repoPath, $"fetch origin \"{branch}\" --prune --no-tags", 15000);
+            logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] git fetch origin \"{branch}\" --prune --no-tags");
+            var (code, stdout, stderr) = RunGit(repoPath, $"fetch origin \"{branch}\" --prune --no-tags", 15000);
+            string output = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : !string.IsNullOrWhiteSpace(stdout) ? stdout.Trim() : "OK";
+            logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] {(code == 0 ? "✓" : "✗")} {output}");
         }
         
         public static List<FileChangeItem> GetFileChanges(string repoPath)
@@ -309,7 +334,7 @@ namespace GitBranchSwitcher {
             logger?.Invoke(detectMessage);
             WriteConsoleLog(detectMessage);
 
-            if (confirmLockRecovery == null)
+            if (_cancelRequested || confirmLockRecovery == null)
                 return result;
 
             if (!confirmLockRecovery(args, string.IsNullOrWhiteSpace(result.stderr) ? result.stdout : result.stderr)) {
@@ -829,15 +854,36 @@ namespace GitBranchSwitcher {
                     return (-1, "", "Git无法启动");
                 p.BeginOutputReadLine();
                 p.BeginErrorReadLine();
-                if (timeoutMs < 0)
-                    p.WaitForExit();
-                else if (!p.WaitForExit(timeoutMs)) {
-                    try {
-                        p.Kill(true);
-                    } catch {
+                _runningProcesses[p.Id] = p;
+                bool cancelledOrKilled = false;
+                bool timedOut = false;
+                try {
+                    // 以 500ms 为步长轮询，支持随时取消
+                    int effectiveTimeout = timeoutMs < 0 ? 10 * 60 * 1000 : timeoutMs;
+                    long deadline = Environment.TickCount64 + effectiveTimeout;
+                    while (!p.HasExited) {
+                        if (_cancelRequested) { cancelledOrKilled = true; break; }
+                        long remaining = deadline - Environment.TickCount64;
+                        if (remaining <= 0) { timedOut = true; break; }
+                        p.WaitForExit((int)Math.Min(remaining, 500));
                     }
+                    // 进程仍活着（超时或取消）→ 强杀
+                    if (!p.HasExited) {
+                        try { p.Kill(true); } catch { }
+                    }
+                    // 外部 Kill 后进程已退出但 cancel 标志也被置位
+                    if (_cancelRequested) cancelledOrKilled = true;
+                } finally {
+                    _runningProcesses.TryRemove(p.Id, out _);
+                }
 
-                    return (-2, stdoutSb.ToString(), $"超时(>{timeoutMs / 1000}s)");
+                if (cancelledOrKilled)
+                    return (-4, stdoutSb.ToString(), "已取消");
+                if (timedOut) {
+                    string reason = timeoutMs < 0
+                        ? "进程无响应(>10min)，已强制终止"
+                        : $"超时(>{timeoutMs / 1000}s)";
+                    return (-2, stdoutSb.ToString(), reason);
                 }
 
                 outWait.WaitOne(5000);

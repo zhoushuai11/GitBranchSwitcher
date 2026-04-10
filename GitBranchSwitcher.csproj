@@ -9,10 +9,10 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.3.7</AssemblyVersion>
-        <FileVersion>1.3.7</FileVersion>
+        <AssemblyVersion>1.3.9</AssemblyVersion>
+        <FileVersion>1.3.9</FileVersion>
 
-        <IsBetaMode>true</IsBetaMode>
+        <IsBetaMode>false</IsBetaMode>
 
         <IsPureMode>false</IsPureMode>
         <IsBossMode>false</IsBossMode>
@@ -22,8 +22,10 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 修复深色主题 bug。
-            2. 优化：当只选中一个仓库的时候，右边切线列表会改为选中仓库远端池
+            1. 增加取消切线按钮。
+            2. 增加快捷键功能。
+            3. 增加后台自动 fetch 功能。
+            4. 优化性能。
         </ReleaseNote>
 
         <DeployRootPath>\\s4.biubiubiu.io\share</DeployRootPath>

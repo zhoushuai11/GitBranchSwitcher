@@ -11,6 +11,7 @@ namespace GitBranchSwitcher
         public GitRepo Repo { get; set; }
         public bool Success { get; set; }
         public bool Warning { get; set; }
+        public bool Cancelled { get; set; }
         public string Message { get; set; }
         public string StatusText { get; set; }
         public double DurationSeconds { get; set; }
@@ -95,8 +96,9 @@ namespace GitBranchSwitcher
                         statusText = res.statusText;
                         repo.SwitchOk = ok;
                         repo.LastMessage = msg;
-                        repo.SwitchSeverity = warning
-                            ? RepoSwitchSeverity.Warning
+                        bool cancelled = !ok && GitHelper.IsCancelRequested;
+                        repo.SwitchSeverity = cancelled ? RepoSwitchSeverity.Cancelled
+                            : warning ? RepoSwitchSeverity.Warning
                             : ok ? RepoSwitchSeverity.None : RepoSwitchSeverity.Error;
                         repo.SwitchStatusText = warning ? statusText : "";
                         if (ok)
@@ -129,6 +131,7 @@ namespace GitBranchSwitcher
                             Repo = repo,
                             Success = ok,
                             Warning = warning,
+                            Cancelled = !ok && GitHelper.IsCancelRequested,
                             Message = msg,
                             StatusText = statusText,
                             DurationSeconds = sw.Elapsed.TotalSeconds,

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -12,6 +13,10 @@ using System.Text;
 
 namespace GitBranchSwitcher {
     public partial class MainForm : Form {
+        [DllImport("user32.dll")]
+        private static extern int SendMessage(IntPtr hWnd, int wMsg, bool wParam, int lParam);
+        private const int WM_SETREDRAW = 0x0B;
+
         // ==========================================
         // 布局容器
         // ==========================================
@@ -34,7 +39,7 @@ namespace GitBranchSwitcher {
         // 3. 快捷操作区
         private Label lblTargetBranch, lblFetchStatus;
         private ComboBox cmbTargetBranch;
-        private Button btnSwitchAll, btnUseCurrentBranch, btnToggleConsole, btnMyCollection;
+        private Button btnSwitchAll, btnUseCurrentBranch, btnToggleConsole, btnMyCollection, btnCancelSwitch;
         private CheckBox chkStashOnSwitch, chkReapplyStashOnSwitch, chkFastMode, chkConfirmOnSwitch;
 
         // 状态与动画区
@@ -42,6 +47,7 @@ namespace GitBranchSwitcher {
         private PictureBox pbState;
         private Label lblStateText;
         private System.Windows.Forms.Timer flashTimer;
+        private System.Windows.Forms.Timer _autoSyncTimer;
 
         // 默认图片大小
         private const int DEFAULT_IMG_SIZE = 180;
@@ -72,6 +78,7 @@ namespace GitBranchSwitcher {
         // 数据与逻辑对象
         // ==========================================
         private readonly BindingList<GitRepo> _repos = new BindingList<GitRepo>();
+        private Font? _boldFont; // 缓存粗体字体，避免每次 RenderRepoItem 都 new Font
         private List<string> _allBranches = new List<string>();
         private AppSettings _settings;
         private System.Threading.CancellationTokenSource? _loadCts;
@@ -193,14 +200,10 @@ namespace GitBranchSwitcher {
             }
             // ========================================================
 
-            _myCollection = CollectionService.Load(_settings.UpdateSourcePath, Environment.UserName);
-
             InitializeComponent();
-            
+
             // 加载我的藏品
             _myCollection = CollectionService.Load(_settings.UpdateSourcePath, Environment.UserName);
-
-            InitializeComponent();
             TrySetRuntimeIcon();
             InitUi();
 #if !BOSS_MODE
@@ -258,6 +261,56 @@ namespace GitBranchSwitcher {
             this.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.BackColor = Color.WhiteSmoke;
             this.ForeColor = SystemColors.ControlText;
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData) {
+            // Fetch（默认 F5）
+            if (keyData == (Keys)_settings.ShortcutFetchKey) {
+                if (btnSwitchAll.Enabled && lvRepos.Items.Count > 0) {
+                    var targets = lvRepos.Items.Cast<ListViewItem>()
+                        .Where(i => i.Checked).ToList();
+                    if (!targets.Any())
+                        targets = lvRepos.Items.Cast<ListViewItem>().ToList();
+                    Action<string> fetchLogger = line => BeginInvoke((Action)(() => Log(line)));
+                    _ = Task.Run(async () => {
+                        var opts = new ParallelOptions { MaxDegreeOfParallelism = 12 };
+                        Parallel.ForEach(targets, opts, item => {
+                            if (item.Tag is GitRepo repo) {
+                                repo.IsFetching = true;
+                                BeginInvoke((Action)(() => RenderRepoItem(item)));
+                                GitHelper.FetchCurrentBranch(repo.Path, fetchLogger);
+                                repo.IsFetching = false;
+                                BeginInvoke((Action)(() => RenderRepoItem(item)));
+                            }
+                        });
+                        await Task.Delay(0); // suppress CS1998
+                        BeginInvoke((Action)(async () => await BatchSyncStatusUpdate()));
+                    });
+                }
+                return true;
+            }
+            // 填入（默认 Q）
+            if (keyData == (Keys)_settings.ShortcutFillKey) {
+                btnUseCurrentBranch.PerformClick();
+                return true;
+            }
+            // 一键切线（默认 Enter）
+            if (keyData == (Keys)_settings.ShortcutSwitchKey) {
+                if (btnSwitchAll.Enabled)
+                    _ = SwitchAllAsync();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>根据 _settings 启动或停止自动同步定时器</summary>
+        private void ApplyAutoSyncFromSettings() {
+            _autoSyncTimer.Stop();
+            int totalMs = (_settings.AutoSyncIntervalMinutes * 60 + _settings.AutoSyncIntervalSeconds) * 1000;
+            if (totalMs > 0) {
+                _autoSyncTimer.Interval = totalMs;
+                _autoSyncTimer.Start();
+            }
         }
         
         private void InitRandomTheme() {
@@ -555,6 +608,7 @@ namespace GitBranchSwitcher {
                 // [修改提示语]
                 statusLabel.Text = $"正在极速 Fetch {items.Count} 个仓库 (仅当前分支)...";
                 statusProgress.Visible = true;
+                Action<string> fetchLogger = line => BeginInvoke((Action)(() => Log(line)));
 
                 try {
                     await Task.Run(() => {
@@ -564,8 +618,11 @@ namespace GitBranchSwitcher {
                         };
                         Parallel.ForEach(items, opts, (item) => {
                             if (item.Tag is GitRepo repo) {
+                                repo.IsFetching = true;
+                                BeginInvoke((Action)(() => RenderRepoItem(item)));
                                 // [修改] 调用新方法，只 Fetch 当前分支
-                                GitHelper.FetchCurrentBranch(repo.Path);
+                                GitHelper.FetchCurrentBranch(repo.Path, fetchLogger);
+                                repo.IsFetching = false;
                             }
                         });
                     });
@@ -588,6 +645,7 @@ namespace GitBranchSwitcher {
                 btnFetchAll.Enabled = false;
                 statusLabel.Text = $"正在极速 Fetch 所有 {items.Count} 个仓库...";
                 statusProgress.Visible = true;
+                Action<string> fetchLogger = line => BeginInvoke((Action)(() => Log(line)));
 
                 try {
                     await Task.Run(() => {
@@ -596,7 +654,10 @@ namespace GitBranchSwitcher {
                         };
                         Parallel.ForEach(items, opts, (item) => {
                             if (item.Tag is GitRepo repo) {
-                                GitHelper.FetchCurrentBranch(repo.Path);
+                                repo.IsFetching = true;
+                                BeginInvoke((Action)(() => RenderRepoItem(item)));
+                                GitHelper.FetchCurrentBranch(repo.Path, fetchLogger);
+                                repo.IsFetching = false;
                             }
                         });
                     });
@@ -728,6 +789,18 @@ namespace GitBranchSwitcher {
                 Font = new Font("Segoe UI", 12, FontStyle.Bold)
             };
             btnSwitchAll.FlatAppearance.BorderSize = 0;
+            btnCancelSwitch = new Button {
+                Text = "⏹ 取消切线",
+                Height = 40,
+                Dock = DockStyle.Top,
+                BackColor = Color.Crimson,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Cursor = Cursors.Hand,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Visible = false
+            };
+            btnCancelSwitch.FlatAppearance.BorderSize = 0;
             chkStashOnSwitch = new CheckBox {
                 Text = "🔒 尝试 Stash 本地修改",
                 AutoSize = true,
@@ -855,6 +928,7 @@ namespace GitBranchSwitcher {
             pnlActionContent.Controls.Add(chkFastMode);
             pnlActionContent.Controls.Add(chkReapplyStashOnSwitch);
             pnlActionContent.Controls.Add(chkStashOnSwitch);
+            pnlActionContent.Controls.Add(btnCancelSwitch);
             pnlActionContent.Controls.Add(btnSwitchAll);
             pnlActionContent.Controls.Add(pnlSpacer1);
             pnlActionContent.Controls.Add(pnlComboRow);
@@ -904,12 +978,50 @@ namespace GitBranchSwitcher {
             };
             UpdateStashOptionUi();
             btnSwitchAll.Click += async (_, __) => await SwitchAllAsync();
+            btnCancelSwitch.Click += (_, __) => {
+                int killed = GitHelper.CancelAllRunningGitOps();
+                btnCancelSwitch.Enabled = false;
+                btnCancelSwitch.Text = "⏹ 取消中...";
+                Log($"⏹ 已取消，正在终止 {killed} 个 git 进程...");
+            };
             flashTimer = new System.Windows.Forms.Timer {
                 Interval = 1500
             };
             flashTimer.Tick += (_, __) => {
                 flashTimer.Stop();
             };
+
+            // ── 自动同步定时器 ──
+            _autoSyncTimer = new System.Windows.Forms.Timer();
+            _autoSyncTimer.Tick += async (_, __) => {
+                if (!btnSwitchAll.Enabled || lvRepos.Items.Count == 0) return;
+                statusLabel.Text = "⏱ 自动 Fetch 中...";
+                statusProgress.Visible = true;
+                Action<string> fetchLogger = line => BeginInvoke((Action)(() => Log(line)));
+                var items = lvRepos.Items.Cast<ListViewItem>().ToList();
+                try {
+                    await Task.Run(() => {
+                        var opts = new ParallelOptions { MaxDegreeOfParallelism = 12 };
+                        Parallel.ForEach(items, opts, item => {
+                            if (item.Tag is GitRepo repo) {
+                                repo.IsFetching = true;
+                                BeginInvoke((Action)(() => RenderRepoItem(item)));
+                                GitHelper.FetchCurrentBranch(repo.Path, fetchLogger);
+                                repo.IsFetching = false;
+                                BeginInvoke((Action)(() => RenderRepoItem(item)));
+                            }
+                        });
+                    });
+                    statusLabel.Text = "⏱ 自动 Fetch 完成，刷新状态...";
+                    await BatchSyncStatusUpdate();
+                } finally {
+                    if (!IsDisposed) { statusProgress.Visible = false; statusLabel.Text = "就绪"; }
+                }
+            };
+            ApplyAutoSyncFromSettings();
+
+            // ── 键盘快捷键 ──
+            this.KeyPreview = true;
             btnToggleConsole.Click += (_, __) => {
                 if (consoleWindow.Visible) {
                     consoleWindow.Hide();
@@ -1394,66 +1506,94 @@ namespace GitBranchSwitcher {
             else
                 item.SubItems[1].ForeColor = defaultTextColor;
 
+            // 缓存粗体字体，避免每次重绘都创建新 Font（GDI 句柄泄漏）
+            _boldFont ??= new Font(item.Font, FontStyle.Bold);
+            Font boldFont = _boldFont;
+
             string syncText = "";
             Color syncColor = dark ? ThemeManager.TextSecondary : Color.Gray;
             Font syncFont = item.Font;
 
-            if (repo.IsSwitching) {
-                double elapsedSeconds = repo.SwitchStartedAt.HasValue
-                    ? Math.Max(0, (DateTime.Now - repo.SwitchStartedAt.Value).TotalSeconds)
-                    : 0;
-                item.Text = $"\u5207\u7ebf\u4e2d {elapsedSeconds:F0}s";
-                item.SubItems[0].ForeColor = dark ? ThemeManager.AccentYellow : Color.DarkOrange;
-                item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = dark ? Color.FromArgb(0x38, 0x28, 0x00) : Color.FromArgb(255, 248, 220);
-                syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u5207\u7ebf\u4e2d" : repo.LiveStatus;
-                syncColor = dark ? ThemeManager.AccentYellow : Color.DarkOrange;
-                syncFont = new Font(item.Font, FontStyle.Bold);
+            // ── Fetch 中 ── 青色（优先级最高）
+            if (repo.IsFetching) {
+                syncText = "Fetch中...";
+                syncColor = dark ? Color.Cyan : Color.DarkCyan;
+                syncFont = boldFont;
+
+            // ── 切线中 ── 深橙色
+            } else if (repo.IsSwitching) {
+                double elapsed = repo.SwitchStartedAt.HasValue
+                    ? Math.Max(0, (DateTime.Now - repo.SwitchStartedAt.Value).TotalSeconds) : 0;
+                item.Text = $"切线中 {elapsed:F0}s";
+                Color orange = dark ? Color.FromArgb(0xFF, 0xA0, 0x00) : Color.FromArgb(0xE6, 0x51, 0x00);
+                item.SubItems[0].ForeColor = orange;
+                item.SubItems[0].Font = boldFont;
+                item.BackColor = dark ? Color.FromArgb(0x3A, 0x28, 0x00) : Color.FromArgb(0xFF, 0xF3, 0xE0);
+                syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "切线中" : repo.LiveStatus;
+                syncColor = orange;
+                syncFont = boldFont;
+
+            // ── 排队中 ── 蓝色
             } else if (repo.IsSwitchQueued) {
-                item.Text = "\u6392\u961f\u4e2d";
-                item.SubItems[0].ForeColor = dark ? ThemeManager.AccentBlue : Color.SteelBlue;
-                item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = dark ? Color.FromArgb(0x08, 0x1C, 0x38) : Color.FromArgb(240, 248, 255);
-                syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "\u7b49\u5f85" : repo.LiveStatus;
-                syncColor = dark ? ThemeManager.AccentBlue : Color.SteelBlue;
-                syncFont = new Font(item.Font, FontStyle.Bold);
+                item.Text = "排队中";
+                Color blue = dark ? ThemeManager.AccentBlue : Color.FromArgb(0x15, 0x65, 0xC0);
+                item.SubItems[0].ForeColor = blue;
+                item.SubItems[0].Font = boldFont;
+                item.BackColor = dark ? Color.FromArgb(0x08, 0x1C, 0x38) : Color.FromArgb(0xEE, 0xF4, 0xFF);
+                syncText = string.IsNullOrWhiteSpace(repo.LiveStatus) ? "等待" : repo.LiveStatus;
+                syncColor = blue;
+                syncFont = boldFont;
+
+            // ── 警告 ── 琥珀色
             } else if (repo.SwitchSeverity == RepoSwitchSeverity.Warning) {
-                item.SubItems[0].ForeColor = dark ? ThemeManager.AccentYellow : Color.Goldenrod;
-                item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = dark ? Color.FromArgb(0x2C, 0x22, 0x00) : Color.FromArgb(255, 251, 235);
-                syncText = string.IsNullOrWhiteSpace(repo.SwitchStatusText) ? "stash apply \u5931\u8d25" : repo.SwitchStatusText;
-                syncColor = dark ? ThemeManager.AccentYellow : Color.Goldenrod;
-                syncFont = new Font(item.Font, FontStyle.Bold);
-            } else if (!repo.SwitchOk && !string.IsNullOrWhiteSpace(repo.LastMessage)) {
-                item.SubItems[0].ForeColor = dark ? ThemeManager.AccentRed : Color.Crimson;
-                item.SubItems[0].Font = new Font(item.Font, FontStyle.Bold);
-                item.BackColor = dark ? Color.FromArgb(0x32, 0x08, 0x08) : Color.FromArgb(255, 240, 240);
+                Color amber = dark ? ThemeManager.AccentYellow : Color.FromArgb(0xB8, 0x86, 0x0B);
+                item.SubItems[0].ForeColor = amber;
+                item.SubItems[0].Font = boldFont;
+                item.BackColor = dark ? Color.FromArgb(0x2C, 0x22, 0x00) : Color.FromArgb(0xFF, 0xFD, 0xE7);
+                syncText = string.IsNullOrWhiteSpace(repo.SwitchStatusText) ? "stash apply 失败" : repo.SwitchStatusText;
+                syncColor = amber;
+                syncFont = boldFont;
+
+            // ── 已取消 ── 灰色
+            } else if (repo.SwitchSeverity == RepoSwitchSeverity.Cancelled) {
+                item.SubItems[0].ForeColor = dark ? ThemeManager.TextSecondary : Color.Gray;
+                item.BackColor = dark ? Color.FromArgb(0x28, 0x28, 0x2A) : Color.FromArgb(0xF5, 0xF5, 0xF5);
+                syncText = "已取消";
+                syncColor = dark ? ThemeManager.TextSecondary : Color.Gray;
+
+            // ── 失败 ── 红色
+            } else if (repo.SwitchSeverity == RepoSwitchSeverity.Error
+                       || (!repo.SwitchOk && !string.IsNullOrWhiteSpace(repo.LastMessage))) {
+                Color red = dark ? ThemeManager.AccentRed : Color.Crimson;
+                item.SubItems[0].ForeColor = red;
+                item.SubItems[0].Font = boldFont;
+                item.BackColor = dark ? Color.FromArgb(0x32, 0x08, 0x08) : Color.FromArgb(0xFF, 0xF0, 0xF0);
                 syncText = SummarizeSwitchFailure(repo.LastMessage);
-                syncColor = dark ? ThemeManager.AccentRed : Color.Crimson;
-                syncFont = new Font(item.Font, FontStyle.Bold);
+                syncColor = red;
+                syncFont = boldFont;
+
+            // ── 同步状态（逻辑不变，只改颜色）──
             } else if (repo.IsSyncChecked) {
                 if (!repo.HasUpstream) {
-                    syncText = "\u65e0\u8fdc\u7a0b";
-                    syncColor = dark ? ThemeManager.TextDisabled : Color.Gray;
+                    syncText = "无远程";
+                    syncColor = dark ? ThemeManager.TextSecondary : Color.Gray;
                 } else if (repo.Incoming == 0 && repo.Outgoing == 0) {
-                    syncText = "\u5c31\u7eea";
-                    syncColor = defaultTextColor;
+                    syncText = "✓ 已同步";
+                    syncColor = dark ? ThemeManager.AccentGreen : Color.FromArgb(0x2E, 0x7D, 0x32);
                 } else {
                     var sb = new List<string>();
                     bool hasPull = repo.Incoming > 0;
                     bool hasPush = repo.Outgoing > 0;
-                    if (hasPull)
-                        sb.Add($"\u2193 {repo.Incoming}");
-                    if (hasPush)
-                        sb.Add($"\u2191 {repo.Outgoing}");
+                    if (hasPull) sb.Add($"↓ {repo.Incoming}");
+                    if (hasPush) sb.Add($"↑ {repo.Outgoing}");
                     syncText = string.Join(" ", sb);
                     if (hasPush && hasPull)
-                        syncColor = dark ? ThemeManager.AccentRed : Color.Red;
+                        syncColor = dark ? ThemeManager.AccentRed : Color.Crimson;    // 分叉 → 红
                     else if (hasPull)
-                        syncColor = dark ? ThemeManager.AccentGreen : Color.Green;
+                        syncColor = dark ? ThemeManager.AccentBlue : Color.FromArgb(0x15, 0x65, 0xC0);  // 需Pull → 蓝
                     else if (hasPush)
-                        syncColor = dark ? ThemeManager.AccentRed : Color.Red;
-                    syncFont = new Font(item.Font, FontStyle.Bold);
+                        syncColor = dark ? Color.FromArgb(0xFF, 0xA0, 0x00) : Color.FromArgb(0xE6, 0x51, 0x00); // 需Push → 橙
+                    syncFont = boldFont;
                 }
             } else {
                 syncText = "...";
@@ -1605,27 +1745,33 @@ namespace GitBranchSwitcher {
             if (string.IsNullOrEmpty(content))
                 return;
             string[] lines = content.Split('\n');
-            int lineNum = 0;
-            foreach (var line in lines) {
-                lineNum++;
-                string prefix = $"{lineNum,4}│ ";
-                int start = rtbDiff.TextLength;
-                rtbDiff.AppendText(prefix + line + "\n");
-                rtbDiff.Select(start, prefix.Length);
-                rtbDiff.SelectionColor = Color.FromArgb(80, 80, 80);
-                rtbDiff.Select(start + prefix.Length, line.Length);
-                if (line.StartsWith("+") && !line.StartsWith("+++"))
-                    rtbDiff.SelectionColor = Color.LightGreen;
-                else if (line.StartsWith("-") && !line.StartsWith("---"))
-                    rtbDiff.SelectionColor = Color.LightSalmon;
-                else if (line.StartsWith("@@"))
-                    rtbDiff.SelectionColor = Color.LightSkyBlue;
-                else
-                    rtbDiff.SelectionColor = Color.Gainsboro;
+            // 挂起 RichTextBox 重绘，避免逐行刷新导致的卡顿
+            SendMessage(rtbDiff.Handle, WM_SETREDRAW, false, 0);
+            try {
+                int lineNum = 0;
+                foreach (var line in lines) {
+                    lineNum++;
+                    string prefix = $"{lineNum,4}│ ";
+                    int start = rtbDiff.TextLength;
+                    rtbDiff.AppendText(prefix + line + "\n");
+                    rtbDiff.Select(start, prefix.Length);
+                    rtbDiff.SelectionColor = Color.FromArgb(80, 80, 80);
+                    rtbDiff.Select(start + prefix.Length, line.Length);
+                    if (line.StartsWith("+") && !line.StartsWith("+++"))
+                        rtbDiff.SelectionColor = Color.LightGreen;
+                    else if (line.StartsWith("-") && !line.StartsWith("---"))
+                        rtbDiff.SelectionColor = Color.LightSalmon;
+                    else if (line.StartsWith("@@"))
+                        rtbDiff.SelectionColor = Color.LightSkyBlue;
+                    else
+                        rtbDiff.SelectionColor = Color.Gainsboro;
+                }
+                rtbDiff.Select(0, 0);
+                rtbDiff.ScrollToCaret();
+            } finally {
+                SendMessage(rtbDiff.Handle, WM_SETREDRAW, true, 0);
+                rtbDiff.Invalidate();
             }
-
-            rtbDiff.Select(0, 0);
-            rtbDiff.ScrollToCaret();
         }
 
         private async Task ToggleStagedStatus() {
@@ -2633,6 +2779,8 @@ namespace GitBranchSwitcher {
                 return;
             }
 
+            GitHelper.ResetCancelFlag();
+
             if (_settings.ConfirmOnSwitch) {
                 if (!ShowSwitchConfirmDialog(target))
                     return;
@@ -2655,6 +2803,7 @@ namespace GitBranchSwitcher {
                 RenderRepoItem(item);
             }
             btnSwitchAll.Enabled = false;
+            btnCancelSwitch.Visible = true;
             statusProgress.Visible = true;
             statusProgress.Style = ProgressBarStyle.Blocks;
             statusProgress.Minimum = 0;
@@ -2673,16 +2822,27 @@ namespace GitBranchSwitcher {
                     if (result.Success)
                         result.Repo.CurrentBranch = target;
                     result.Repo.IsSyncChecked = false;
-                    item.Text = (result.Warning ? "\u8b66\u544a" : result.Success ? "\u6210\u529f" : "\u5931\u8d25") + $" {result.DurationSeconds:F1}s";
+                    string statusWord = result.Cancelled ? "已取消"
+                        : result.Warning ? "警告"
+                        : result.Success ? "成功"
+                        : "失败";
+                    item.Text = statusWord + $" {result.DurationSeconds:F1}s";
                     RenderRepoItem(item);
                 }
 
                 if (result.ProgressIndex <= statusProgress.Maximum)
                     statusProgress.Value = result.ProgressIndex;
+                // 结果日志：取消和失败需要补一条，成功/警告的 liveLogHandler 里已经有 "OK" 或错误详情
+                if (result.Cancelled)
+                    Log($"[{result.Repo.Name}] ⏹ 已取消");
+                else if (!result.Success && !result.Warning)
+                    Log($"[{result.Repo.Name}] ❌ 切线失败");
             });
 
             var liveLogHandler = new Progress<RepoSwitchLogEntry>(entry => {
                 if (!string.IsNullOrWhiteSpace(entry.Message)) {
+                    // 取消时屏蔽中间步骤噪音，结果会由 progressHandler 统一记录
+                    if (GitHelper.IsCancelRequested) return;
                     entry.Repo.IsSwitchQueued = false;
                     entry.Repo.IsSwitching = true;
                     entry.Repo.SwitchStartedAt ??= DateTime.Now;
@@ -2727,22 +2887,6 @@ namespace GitBranchSwitcher {
                 statusLabel.Text = $"Git done ({gitSeconds:F1}s) | Post in background";
                 Log($"Git done in {gitSeconds:F1}s. Post-processing moved to background.");
                 StartPostSwitchBackgroundWork(gitSeconds, items, targetRepos.Count);
-                if (false) {
-
-#if !BOSS_MODE && !PURE_MODE
-                if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                    int currentCardCount = _myCollection.Count;
-                    int currentScore = _myCollection.Sum(x => x.Score);
-                    var (nc, nt, ns) = await LeaderboardService.UploadMyScoreAsync(totalSeconds, 0, currentCardCount, currentScore);
-                    UpdateStatsUi(nc, nt, ns);
-                }
-#endif
-                await FinishFrogTravelAndDrawCard(targetRepos.Count);
-                
-                statusLabel.Text = $"完成 (总耗时 {totalSeconds:F1}s)";
-                Log($"🏁 全部完成，总耗时 {totalSeconds:F1}s");
-
-                }
             } finally {
                 // === [新增 3] 清理计时器 ===
                 uiRefreshTimer.Stop();
@@ -2753,6 +2897,10 @@ namespace GitBranchSwitcher {
                 statusProgress.Style = ProgressBarStyle.Marquee; 
                 statusProgress.Value = 0;
                 btnSwitchAll.Enabled = true;
+                btnCancelSwitch.Visible = false;
+                btnCancelSwitch.Enabled = true;
+                btnCancelSwitch.Text = "⏹ 取消切线";
+                GitHelper.ResetCancelFlag();
             }
         }
 
@@ -3028,262 +3176,205 @@ namespace GitBranchSwitcher {
             string rootPath = _settings.FrameWorkImgPath;
 
             // 1. 准备主题列表
-            var themeList = new List<string> {
-                THEME_NONE, THEME_COLLECTION
-            }; // 固定选项
-            if (Directory.Exists(rootPath)) {
-                var dirs = Directory.GetDirectories(rootPath);
-                themeList.AddRange(dirs.Select(d => Path.GetFileName(d)));
+            var themeList = new List<string> { THEME_NONE, THEME_COLLECTION };
+            if (Directory.Exists(rootPath))
+                themeList.AddRange(Directory.GetDirectories(rootPath).Select(d => Path.GetFileName(d)));
+
+            // ── 收藏品选项 ──
+            var sortedCollection = _myCollection
+                .OrderByDescending(x => GetRarityWeight(x.Rarity))
+                .ThenByDescending(x => x.CollectTime).ToList();
+
+            // ── 辅助：把 Keys 格式化成可读字符串 ──
+            string FormatKeys(Keys k) {
+                var parts = new List<string>();
+                if ((k & Keys.Control) != 0) parts.Add("Ctrl");
+                if ((k & Keys.Alt)     != 0) parts.Add("Alt");
+                if ((k & Keys.Shift)   != 0) parts.Add("Shift");
+                Keys baseKey = k & ~Keys.Modifiers;
+                parts.Add(baseKey == Keys.Return ? "Enter" : baseKey.ToString());
+                return string.Join("+", parts);
             }
 
-            using var form = new Form {
-                Text = "界面设置",
-                Width = 450,
-                Height = 430,
-                StartPosition = FormStartPosition.CenterParent,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MaximizeBox = false,
-                MinimizeBox = false
-            };
+            // ════════════════════════════════════════
+            // 控件定义（位置先用紧凑基准，收藏区展开后统一下移）
+            // ════════════════════════════════════════
+            const int L = 20, W = 390;
+            const int collH = 62; // 收藏品区域高度（展开时下移量）
+            int baseFormH = 530;  // 不含收藏区的窗体高度
 
-            // === UI 控件 ===
-            var lblTheme = new Label {
-                Text = "🎨 主题风格:",
-                Top = 20,
-                Left = 20,
-                AutoSize = true,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold)
-            };
-
-            var cmbThemes = new ComboBox {
-                Top = 50,
-                Left = 20,
-                Width = 390,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 10)
-            };
+            // 主题选择
+            var lblTheme = new Label { Text = "🎨 主题风格:", Top = 15, Left = L, AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
+            var cmbThemes = new ComboBox { Top = 40, Left = L, Width = W, DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 10) };
             cmbThemes.Items.AddRange(themeList.ToArray());
 
-            // [新增] 收藏品选择区域 (默认隐藏)
-            var lblColl = new Label {
-                Text = "🖼️ 选择展示的收藏品:",
-                Top = 90,
-                Left = 20,
-                AutoSize = true,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Visible = false
-            };
-
-            var cmbCollection = new ComboBox {
-                Top = 120,
-                Left = 20,
-                Width = 390,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 10),
-                Visible = false
-            };
-
-            // 填充收藏品列表
+            // 收藏品（默认隐藏，展开时从 y=74 开始）
+            var lblColl = new Label { Text = "🖼️ 选择展示的收藏品:", Top = 74, Left = L, AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Visible = false };
+            var cmbCollection = new ComboBox { Top = 99, Left = L, Width = W, DropDownStyle = ComboBoxStyle.DropDownList, Font = new Font("Segoe UI", 10), Visible = false };
             cmbCollection.Items.Add(COLL_RANDOM);
-            // 按稀有度排序：UR > SSR > SR > R > N
-            var sortedCollection = _myCollection.OrderByDescending(x => GetRarityWeight(x.Rarity)).ThenByDescending(x => x.CollectTime).ToList();
+            foreach (var ci in sortedCollection)
+                cmbCollection.Items.Add($"[{ci.Rarity}] {Path.GetFileNameWithoutExtension(ci.FileName)}");
 
-            foreach (var item in sortedCollection) {
-                cmbCollection.Items.Add($"[{item.Rarity}] {Path.GetFileNameWithoutExtension(item.FileName)}");
+            // 以下控件的 Top 是紧凑基准值（收藏区隐藏时），展开时整体 +collH
+            var chkEnableTimeout = new CheckBox { Text = "启用 Git 操作超时限制", Top = 74, Left = L, Width = W, Font = new Font("Segoe UI", 10), Checked = _settings.EnableGitOperationTimeout, Cursor = Cursors.Hand };
+            var lblTimeoutSeconds = new Label { Text = "默认超时时间(秒):", Top = 109, Left = L, AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
+            var numTimeoutSeconds = new NumericUpDown { Top = 132, Left = L, Width = W, Minimum = 1, Maximum = 3600, Value = Math.Max(1, _settings.GitOperationTimeoutSeconds), Font = new Font("Segoe UI", 10) };
+            var lblDivider = new Label { Text = "────────────────────────────", Top = 168, Left = L, AutoSize = true, ForeColor = Color.Gray };
+            var chkDarkMode = new CheckBox { Text = "深色模式 (Dark Mode) — 重启后生效", Top = 186, Left = L, Width = W, Font = new Font("Segoe UI", 10), Checked = _settings.DarkMode, Cursor = Cursors.Hand };
+
+            var lblDivider2 = new Label { Text = "────────────────────────────", Top = 216, Left = L, AutoSize = true, ForeColor = Color.Gray };
+            var lblAutoSyncHeader = new Label { Text = "⏱ 自动同步 (仅 Fetch)", Top = 234, Left = L, AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
+            var chkAutoSyncDlg = new CheckBox { Text = "启用，每", Top = 258, Left = L, AutoSize = true, Checked = _settings.AutoSyncIntervalMinutes > 0 || _settings.AutoSyncIntervalSeconds > 0, Font = new Font("Segoe UI", 10) };
+            var nudAutoSyncDlg = new NumericUpDown { Top = 255, Left = 105, Width = 50, Minimum = 0, Maximum = 60, DecimalPlaces = 0, Value = Math.Max(0, _settings.AutoSyncIntervalMinutes), Font = new Font("Segoe UI", 10), Enabled = _settings.AutoSyncIntervalMinutes > 0 || _settings.AutoSyncIntervalSeconds > 0 };
+            var lblAutoSyncUnit = new Label { Text = "分钟", Top = 261, Left = 160, AutoSize = true, Font = new Font("Segoe UI", 10) };
+            var nudAutoSyncSecsDlg = new NumericUpDown { Top = 255, Left = 207, Width = 50, Minimum = 0, Maximum = 59, DecimalPlaces = 0, Value = _settings.AutoSyncIntervalSeconds, Font = new Font("Segoe UI", 10), Enabled = _settings.AutoSyncIntervalMinutes > 0 };
+            var lblAutoSyncSecUnit = new Label { Text = "秒 自动 Fetch", Top = 261, Left = 262, AutoSize = true, Font = new Font("Segoe UI", 10) };
+            chkAutoSyncDlg.CheckedChanged += (_, __) => { nudAutoSyncDlg.Enabled = chkAutoSyncDlg.Checked; nudAutoSyncSecsDlg.Enabled = chkAutoSyncDlg.Checked; };
+
+            var lblDivider3 = new Label { Text = "────────────────────────────", Top = 292, Left = L, AutoSize = true, ForeColor = Color.Gray };
+            var lblShortcutsHeader = new Label { Text = "🎹 键盘快捷键（点击输入框后按新按键）", Top = 310, Left = L, AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
+
+            // 创建快捷键行的辅助方法
+            (Label lbl, TextBox txt, Button btn) MakeKeyRow(string labelText, int top, Keys current, Action<Keys> onCapture, Keys defaultKey) {
+                var lbl = new Label { Text = labelText, Top = top, Left = L, Width = 90, AutoSize = false, Font = new Font("Segoe UI", 10), TextAlign = ContentAlignment.MiddleLeft };
+                var txt = new TextBox { Top = top - 3, Left = 115, Width = 200, ReadOnly = true, Cursor = Cursors.Hand, Text = FormatKeys(current), Font = new Font("Segoe UI", 10), BackColor = Color.LightYellow };
+                var btn = new Button { Text = "重置", Top = top - 3, Left = 320, Width = 90, Font = new Font("Segoe UI", 9), Height = txt.Height + 2 };
+                txt.KeyDown += (_, e) => { e.SuppressKeyPress = true; onCapture(e.KeyData); txt.Text = FormatKeys(e.KeyData); };
+                btn.Click += (_, __) => { onCapture(defaultKey); txt.Text = FormatKeys(defaultKey); };
+                return (lbl, txt, btn);
             }
 
-            // === 联动逻辑 ===
-            cmbThemes.SelectedIndexChanged += (_, __) => {
+            Keys capturedFetchKey   = (Keys)_settings.ShortcutFetchKey;
+            Keys capturedFillKey    = (Keys)_settings.ShortcutFillKey;
+            Keys capturedSwitchKey  = (Keys)_settings.ShortcutSwitchKey;
+
+            var (lblFetch,   txtFetch,   btnResetFetch)   = MakeKeyRow("Fetch:",   335, capturedFetchKey,   k => capturedFetchKey   = k, Keys.F5);
+            var (lblFill,    txtFill,    btnResetFill)    = MakeKeyRow("填入:",    367, capturedFillKey,    k => capturedFillKey    = k, Keys.Q);
+            var (lblSwitch,  txtSwitch,  btnResetSwitch)  = MakeKeyRow("一键切线:", 399, capturedSwitchKey,  k => capturedSwitchKey  = k, Keys.Return);
+
+            var btnOk = new Button { Text = "💾 保存并应用", Top = 440, Left = L, Width = W, Height = 40, BackColor = Color.DodgerBlue, ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand, DialogResult = DialogResult.OK };
+            btnOk.FlatAppearance.BorderSize = 0;
+
+            using var form = new Form {
+                Text = "界面设置", Width = 450, Height = baseFormH,
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false, MinimizeBox = false
+            };
+
+            // 收藏区展开时需要整体下移的控件列表（记录基准 Top）
+            var shiftable = new (Control ctrl, int baseTop)[] {
+                (chkEnableTimeout, 74), (lblTimeoutSeconds, 109), (numTimeoutSeconds, 132),
+                (lblDivider, 168), (chkDarkMode, 186),
+                (lblDivider2, 216), (lblAutoSyncHeader, 234), (chkAutoSyncDlg, 258), (nudAutoSyncDlg, 255), (lblAutoSyncUnit, 261),
+                (nudAutoSyncSecsDlg, 255), (lblAutoSyncSecUnit, 261),
+                (lblDivider3, 292), (lblShortcutsHeader, 310),
+                (lblFetch, 335), (txtFetch, 332), (btnResetFetch, 332),
+                (lblFill,  367), (txtFill,  364), (btnResetFill,  364),
+                (lblSwitch, 399), (txtSwitch, 396), (btnResetSwitch, 396),
+                (btnOk, 440),
+            };
+
+            void UpdateLayout() {
                 bool isColl = cmbThemes.SelectedItem?.ToString() == THEME_COLLECTION;
                 lblColl.Visible = isColl;
                 cmbCollection.Visible = isColl;
+                int shift = isColl ? collH : 0;
+                foreach (var (ctrl, baseTop) in shiftable)
+                    ctrl.Top = baseTop + shift;
+                form.Height = baseFormH + shift;
+            }
 
-                // 调整窗体布局（如果是收藏模式，把下面的控件往下推）
-                int offset = isColl? 70 : 0;
-                // 这里只是简单的动态布局示意，实际可以用 Panel
-            };
+            void UpdateTimeoutInputState() {
+                lblTimeoutSeconds.Enabled = chkEnableTimeout.Checked;
+                numTimeoutSeconds.Enabled = chkEnableTimeout.Checked;
+            }
 
-            // === 初始化选中状态 ===
-            string currentTheme = _settings.SelectedTheme;
-            if (string.IsNullOrEmpty(currentTheme))
-                currentTheme = THEME_NONE; // 默认无主题
+            cmbThemes.SelectedIndexChanged += (_, __) => UpdateLayout();
+            chkEnableTimeout.CheckedChanged += (_, __) => UpdateTimeoutInputState();
 
-            if (themeList.Contains(currentTheme))
-                cmbThemes.SelectedItem = currentTheme;
-            else
-                cmbThemes.SelectedIndex = 0; // 默认选第一项
+            // 初始化主题选中
+            string currentTheme = string.IsNullOrEmpty(_settings.SelectedTheme) ? THEME_NONE : _settings.SelectedTheme;
+            cmbThemes.SelectedItem = themeList.Contains(currentTheme) ? currentTheme : themeList[0];
 
             // 初始化收藏品选中
             if (_settings.SelectedCollectionItem == "Random" || string.IsNullOrEmpty(_settings.SelectedCollectionItem)) {
                 cmbCollection.SelectedIndex = 0;
             } else {
-                // 尝试通过文件名匹配
-                string target = _settings.SelectedCollectionItem;
                 for (int i = 0; i < cmbCollection.Items.Count; i++) {
-                    if (cmbCollection.Items[i].ToString().Contains(target)) {
-                        cmbCollection.SelectedIndex = i;
-                        break;
+                    if (cmbCollection.Items[i].ToString().Contains(_settings.SelectedCollectionItem)) {
+                        cmbCollection.SelectedIndex = i; break;
                     }
                 }
             }
 
-            // === 其他控件 ===
-            var chkEnableTimeout = new CheckBox {
-                Text = "启用 Git 操作超时限制",
-                Top = 200,
-                Left = 20,
-                Width = 390,
-                Font = new Font("Segoe UI", 10),
-                Checked = _settings.EnableGitOperationTimeout,
-                Cursor = Cursors.Hand
-            };
-
-            var lblTimeoutSeconds = new Label {
-                Text = "默认超时时间(秒):",
-                Top = 235,
-                Left = 20,
-                AutoSize = true,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold)
-            };
-
-            var numTimeoutSeconds = new NumericUpDown {
-                Top = 263,
-                Left = 20,
-                Width = 390,
-                Minimum = 1,
-                Maximum = 3600,
-                Value = Math.Max(1, _settings.GitOperationTimeoutSeconds),
-                Font = new Font("Segoe UI", 10)
-            };
-
-            void UpdateTimeoutInputState() {
-                bool enabled = chkEnableTimeout.Checked;
-                lblTimeoutSeconds.Enabled = enabled;
-                numTimeoutSeconds.Enabled = enabled;
-            }
-            chkEnableTimeout.CheckedChanged += (_, __) => UpdateTimeoutInputState();
-
-            // === 深色模式开关 ===
-            var lblDivider = new Label {
-                Text = "────────────────────────────",
-                Top = 298,
-                Left = 20,
-                AutoSize = true,
-                ForeColor = Color.Gray
-            };
-            var chkDarkMode = new CheckBox {
-                Text = "深色模式 (Dark Mode) — 重启后生效",
-                Top = 314,
-                Left = 20,
-                Width = 390,
-                Font = new Font("Segoe UI", 10),
-                Checked = _settings.DarkMode,
-                Cursor = Cursors.Hand
-            };
-
-            var btnOk = new Button {
-                Text = "💾 保存并应用",
-                Top = 348,
-                Left = 20,
-                Width = 390,
-                Height = 40,
-                BackColor = Color.DodgerBlue,
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand,
-                DialogResult = DialogResult.OK
-            };
-            btnOk.FlatAppearance.BorderSize = 0;
-
             form.Controls.AddRange(new Control[] {
-                lblTheme, cmbThemes, lblColl, cmbCollection, chkEnableTimeout, lblTimeoutSeconds, numTimeoutSeconds, lblDivider, chkDarkMode, btnOk
+                lblTheme, cmbThemes, lblColl, cmbCollection,
+                chkEnableTimeout, lblTimeoutSeconds, numTimeoutSeconds,
+                lblDivider, chkDarkMode,
+                lblDivider2, lblAutoSyncHeader, chkAutoSyncDlg, nudAutoSyncDlg, lblAutoSyncUnit,
+                nudAutoSyncSecsDlg, lblAutoSyncSecUnit,
+                lblDivider3, lblShortcutsHeader,
+                lblFetch, txtFetch, btnResetFetch,
+                lblFill, txtFill, btnResetFill,
+                lblSwitch, txtSwitch, btnResetSwitch,
+                btnOk
             });
             form.AcceptButton = btnOk;
 
-            // 触发一次联动以设置初始可见性
-            // Hack: 手动调用事件处理逻辑
-            bool showColl = cmbThemes.SelectedItem?.ToString() == THEME_COLLECTION;
-            lblColl.Visible = showColl;
-            cmbCollection.Visible = showColl;
+            UpdateLayout();         // 初始布局
             UpdateTimeoutInputState();
-
-            // Apply dark theme to this dynamic dialog
             if (_settings.DarkMode) ThemeManager.Apply(form);
 
-            // === 保存逻辑 ===
+            // ════ 保存逻辑 ════
             if (form.ShowDialog(this) == DialogResult.OK) {
-                bool needApply = false;
-                bool settingsChanged = false;
+                bool needApply = false, settingsChanged = false;
 
-                // 1. 保存主题
+                // 1. 主题
                 string newTheme = cmbThemes.SelectedItem?.ToString();
-                if (newTheme == THEME_NONE)
-                    newTheme = ""; // 空字符串代表无主题
+                if (newTheme == THEME_NONE) newTheme = "";
+                if (newTheme != _settings.SelectedTheme) { _settings.SelectedTheme = newTheme; needApply = settingsChanged = true; }
 
-                if (newTheme != _settings.SelectedTheme) {
-                    _settings.SelectedTheme = newTheme;
-                    needApply = true;
-                    settingsChanged = true;
-                }
-
-                // 2. 保存收藏品设置
+                // 2. 收藏品
                 if (newTheme == THEME_COLLECTION) {
-                    if (cmbCollection.SelectedIndex == 0) {
-                        _settings.SelectedCollectionItem = "Random";
-                    } else {
-                        // 从显示的文本 "[SSR] Name" 中提取真实文件名
-                        // 对应上面的 sortedCollection 索引 (注意索引 -1 因为第0项是Random)
-                        int index = cmbCollection.SelectedIndex - 1;
-                        if (index >= 0 && index < sortedCollection.Count) {
-                            _settings.SelectedCollectionItem = sortedCollection[index].FileName;
-                        }
-                    }
-
-                    needApply = true; // 即使主题没变，换了图片也要刷新
-                    settingsChanged = true;
+                    _settings.SelectedCollectionItem = cmbCollection.SelectedIndex == 0
+                        ? "Random"
+                        : (cmbCollection.SelectedIndex - 1 is int idx && idx >= 0 && idx < sortedCollection.Count
+                            ? sortedCollection[idx].FileName : "Random");
+                    needApply = settingsChanged = true;
                 }
 
+                // 3. 超时
                 bool newEnableTimeout = chkEnableTimeout.Checked;
-                int newTimeoutSeconds = Decimal.ToInt32(numTimeoutSeconds.Value);
-                if (newEnableTimeout != _settings.EnableGitOperationTimeout) {
-                    _settings.EnableGitOperationTimeout = newEnableTimeout;
-                    settingsChanged = true;
-                }
-                if (newTimeoutSeconds != _settings.GitOperationTimeoutSeconds) {
-                    _settings.GitOperationTimeoutSeconds = newTimeoutSeconds;
-                    settingsChanged = true;
-                }
+                int  newTimeoutSeconds = (int)numTimeoutSeconds.Value;
+                if (newEnableTimeout != _settings.EnableGitOperationTimeout) { _settings.EnableGitOperationTimeout = newEnableTimeout; settingsChanged = true; }
+                if (newTimeoutSeconds != _settings.GitOperationTimeoutSeconds) { _settings.GitOperationTimeoutSeconds = newTimeoutSeconds; settingsChanged = true; }
 
-                // 3. 保存深色模式
+                // 4. 深色模式
                 bool darkModeChanged = chkDarkMode.Checked != _settings.DarkMode;
-                if (darkModeChanged) {
-                    _settings.DarkMode = chkDarkMode.Checked;
-                    settingsChanged = true;
-                }
+                if (darkModeChanged) { _settings.DarkMode = chkDarkMode.Checked; settingsChanged = true; }
 
-                if (settingsChanged) {
-                    _settings.Save();
-                }
+                // 5. 自动同步
+                int newAutoSync = chkAutoSyncDlg.Checked ? (int)nudAutoSyncDlg.Value : 0;
+                int newAutoSyncSecs = chkAutoSyncDlg.Checked ? (int)nudAutoSyncSecsDlg.Value : 0;
+                bool autoSyncChanged = newAutoSync != _settings.AutoSyncIntervalMinutes || newAutoSyncSecs != _settings.AutoSyncIntervalSeconds;
+                if (autoSyncChanged) { _settings.AutoSyncIntervalMinutes = newAutoSync; _settings.AutoSyncIntervalSeconds = newAutoSyncSecs; settingsChanged = true; ApplyAutoSyncFromSettings(); }
+
+                // 6. 快捷键
+                if ((int)capturedFetchKey   != _settings.ShortcutFetchKey)   { _settings.ShortcutFetchKey   = (int)capturedFetchKey;   settingsChanged = true; }
+                if ((int)capturedFillKey    != _settings.ShortcutFillKey)    { _settings.ShortcutFillKey    = (int)capturedFillKey;    settingsChanged = true; }
+                if ((int)capturedSwitchKey  != _settings.ShortcutSwitchKey)  { _settings.ShortcutSwitchKey  = (int)capturedSwitchKey;  settingsChanged = true; }
+
+                if (settingsChanged) _settings.Save();
 
                 if (darkModeChanged) {
-                    if (_settings.DarkMode) {
-                        // 开启深色模式：立即生效
-                        ThemeManager.Apply(this);
-                        ThemeManager.Apply(consoleWindow);
-                        UpdateThemeLabel();
-                    } else {
-                        // 关闭深色模式：下次启动生效（不能在运行中还原所有控件颜色）
-                        MessageBox.Show("深色模式已关闭，下次启动后生效。", "提示");
-                    }
-                } else if (needApply) {
-                    UpdateThemeLabel();
-                    LoadRandomFrameWorkImage();
-                    MessageBox.Show("设置已保存！");
-                } else if (settingsChanged) {
-                    MessageBox.Show("设置已保存！");
-                }
+                    if (_settings.DarkMode) { ThemeManager.Apply(this); ThemeManager.Apply(consoleWindow); UpdateThemeLabel(); }
+                    else MessageBox.Show("深色模式已关闭，下次启动后生效。", "提示");
+                } else if (needApply) { UpdateThemeLabel(); LoadRandomFrameWorkImage(); MessageBox.Show("设置已保存！"); }
+                else if (settingsChanged) MessageBox.Show("设置已保存！");
             }
         }
+
 
         // [辅助] 稀有度权重排序
         private int GetRarityWeight(string r) {

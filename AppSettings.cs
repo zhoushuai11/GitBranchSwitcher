@@ -24,6 +24,12 @@ namespace GitBranchSwitcher {
         public bool EnableGitOperationTimeout { get; set; } = false;
         public int GitOperationTimeoutSeconds { get; set; } = 300;
         public bool DarkMode { get; set; } = false;
+        public int AutoSyncIntervalMinutes { get; set; } = 0; // 0 = 禁用自动同步
+        public int AutoSyncIntervalSeconds { get; set; } = 0; // 0-59 附加秒数
+        // 键盘快捷键（存 System.Windows.Forms.Keys 枚举的 int 值）
+        public int ShortcutFetchKey  { get; set; } = 116;  // Keys.F5
+        public int ShortcutSwitchKey { get; set; } = 13;   // Keys.Return
+        public int ShortcutFillKey   { get; set; } = 81;   // Keys.Q
 
         public List<string> ParentPaths { get; set; } = new List<string>();
         public List<ParentRepoCache> RepositoryCache { get; set; } = new List<ParentRepoCache>();
