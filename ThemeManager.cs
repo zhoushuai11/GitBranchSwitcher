@@ -94,6 +94,10 @@ namespace GitBranchSwitcher {
                     ApplyToolStrip(ctx);
                     return;
 
+                case ToolStrip ts:
+                    ApplyToolStrip(ts);
+                    return;
+
                 case GroupBox gb:
                     ApplyGroupBox(gb);
                     return;
@@ -137,6 +141,14 @@ namespace GitBranchSwitcher {
                     if (IsLight(rtb.BackColor)) {
                         rtb.BackColor = rtb.ReadOnly ? BgPanel : BgInput;
                         rtb.ForeColor = TextPrimary;
+                        // 把已有文字里的黑色（浅色主题默认色）重置为可读的亮色
+                        if (rtb.TextLength > 0) {
+                            int selStart = rtb.SelectionStart, selLen = rtb.SelectionLength;
+                            rtb.SelectAll();
+                            rtb.SelectionColor = TextPrimary;
+                            rtb.SelectionStart = selStart;
+                            rtb.SelectionLength = selLen;
+                        }
                     }
                     return;
 

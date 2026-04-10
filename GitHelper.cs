@@ -145,6 +145,14 @@ namespace GitBranchSwitcher {
             // 标准反暂存命令
             RunGit(repoPath, $"reset HEAD -- \"{filePath}\"", 5000);
         }
+
+        public static void StageAll(string repoPath) {
+            RunGit(repoPath, "add -A", 5000);
+        }
+
+        public static void UnstageAll(string repoPath) {
+            RunGit(repoPath, "reset HEAD", 5000);
+        }
         public static (int behind, int ahead)? GetSyncCounts(string repoPath)
         {
             // 1. 尝试标准查询 (基于配置的 Upstream)
@@ -631,8 +639,16 @@ namespace GitBranchSwitcher {
         }
         
         // [修改] 提交方法：只提交暂存区 (去掉 add -A)
-        public static (bool ok, string message) Commit(string repoPath, string commitMsg)
+        public static (bool ok, string message) Commit(string repoPath, string commitMsg, bool amend = false)
         {
+            if (amend) {
+                string amendArgs = string.IsNullOrWhiteSpace(commitMsg)
+                    ? "commit --amend --no-edit"
+                    : $"commit --amend -m \"{commitMsg.Replace("\"", "'")}\"";
+                var (code2, _, stderr2) = RunGit(repoPath, amendArgs, 30_000);
+                return code2 == 0 ? (true, "✅ Amend 成功") : (false, $"❌ 失败: {stderr2.Trim()}");
+            }
+
             // 1. 检查暂存区是否有内容
             // git diff --cached --quiet 返回 1 表示有变更，0 表示无变更
             var (c, _, _) = RunGit(repoPath, "diff --cached --quiet", 5000);

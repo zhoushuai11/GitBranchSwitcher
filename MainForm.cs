@@ -55,6 +55,8 @@ namespace GitBranchSwitcher {
         private Label lblRepoInfo;
         private TextBox txtCommitMsg;
         private Button btnCommit, btnPull, btnPush, btnStash;
+        private Button btnFetch, btnStageAll, btnUnstageAll;
+        private CheckBox chkAmend;
         private ListViewGroup grpStaged, grpUnstaged;
 
         // 5. 日志区
@@ -447,8 +449,8 @@ namespace GitBranchSwitcher {
             var btnToggleSelect = MakeBtn("✅ 全选/反选");
             var btnRescan = MakeBtn("🔄 刷新");
             // 定义 Fetch 按钮，使用淡薄荷色区分
-            var btnFetch = MakeBtn("⬇ Fetch", Color.MintCream);
-            btnFetch.ForeColor = Color.DarkSlateGray;
+            var btnRepoFetch = MakeBtn("⬇ Fetch", Color.MintCream);
+            btnRepoFetch.ForeColor = Color.DarkSlateGray;
             var btnFetchAll = MakeBtn("⬇⬇ Fetch All", Color.Honeydew);
             btnFetchAll.ForeColor = Color.DarkGreen;
             var btnNewClone = MakeBtn("➕ 新建拉线", Color.Azure);
@@ -466,7 +468,7 @@ namespace GitBranchSwitcher {
 
             repoToolbar.Controls.Add(btnToggleSelect);
             repoToolbar.Controls.Add(btnRescan);
-            repoToolbar.Controls.Add(btnFetch);
+            repoToolbar.Controls.Add(btnRepoFetch);
             repoToolbar.Controls.Add(new Label {
                 Width = 10
             });
@@ -492,11 +494,11 @@ namespace GitBranchSwitcher {
                 CheckBoxes = true,
                 BorderStyle = BorderStyle.FixedSingle
             };
-            lvRepos.Columns.Add("状态", 60);
+            lvRepos.Columns.Add("状态", 90);
             lvRepos.Columns.Add("当前分支", 240);
             lvRepos.Columns.Add("同步", 110);
             lvRepos.Columns.Add("仓库名", 220);
-            lvRepos.Columns.Add("路径", 450);
+            lvRepos.Columns.Add("路径", 330);
             try {
                 var prop = typeof(Control).GetProperty("DoubleBuffered", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 prop?.SetValue(lvRepos, true, null);
@@ -542,14 +544,14 @@ namespace GitBranchSwitcher {
                     }
                 }
             };
-            btnFetch.Click += async (_, __) => {
+            btnRepoFetch.Click += async (_, __) => {
                 var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
                 if (!items.Any()) {
                     MessageBox.Show("请先勾选需要 Fetch 的仓库");
                     return;
                 }
 
-                btnFetch.Enabled = false;
+                btnRepoFetch.Enabled = false;
                 // [修改提示语]
                 statusLabel.Text = $"正在极速 Fetch {items.Count} 个仓库 (仅当前分支)...";
                 statusProgress.Visible = true;
@@ -573,7 +575,7 @@ namespace GitBranchSwitcher {
                 } finally {
                     statusProgress.Visible = false;
                     statusLabel.Text = "就绪";
-                    btnFetch.Enabled = true;
+                    btnRepoFetch.Enabled = true;
                 }
             };
             btnFetchAll.Click += async (_, __) => {
@@ -938,7 +940,7 @@ namespace GitBranchSwitcher {
                 BorderStyle = BorderStyle.FixedSingle,
                 HeaderStyle = ColumnHeaderStyle.Nonclickable,
                 ShowGroups = true,
-                MultiSelect = false
+                MultiSelect = true
             };
             grpStaged = new ListViewGroup("staged", "已暂存 (Staged)");
             grpUnstaged = new ListViewGroup("unstaged", "未暂存 (Unstaged)");
@@ -951,12 +953,13 @@ namespace GitBranchSwitcher {
             };
             lblRepoInfo = new Label {
                 Dock = DockStyle.Top,
-                Height = 25,
+                Height = 28,
                 Text = "请选择仓库...",
                 TextAlign = ContentAlignment.MiddleLeft,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 ForeColor = Color.DarkSlateGray,
-                BackColor = Color.WhiteSmoke
+                BackColor = Color.WhiteSmoke,
+                Padding = new Padding(6, 0, 0, 0)
             };
             pnlActions = new Panel {
                 Dock = DockStyle.Bottom, Height = 95, Padding = new Padding(5)
@@ -989,10 +992,18 @@ namespace GitBranchSwitcher {
             btnPull.Width = 80;
             btnStash = MakeBtn("📦 Stash");
             btnStash.Width = 70;
+            chkAmend = new CheckBox {
+                Text = "Amend",
+                AutoSize = true,
+                Height = 28,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(0, 5, 0, 0)
+            };
             pnlBtns.Controls.Add(btnCommit);
             pnlBtns.Controls.Add(btnPush);
             pnlBtns.Controls.Add(btnPull);
             pnlBtns.Controls.Add(btnStash);
+            pnlBtns.Controls.Add(chkAmend);
             pnlActions.Controls.Add(txtCommitMsg);
             pnlActions.Controls.Add(pnlBtns);
             rtbDiff = new RichTextBox {
@@ -1009,13 +1020,37 @@ namespace GitBranchSwitcher {
             pnlDetailRight.Controls.Add(pnlActions);
             splitConsole.Panel1.Controls.Add(lvFileChanges);
             splitConsole.Panel2.Controls.Add(pnlDetailRight);
+            // ── Toolbar ──────────────────────────────────────────────────────
+            var pnlToolbar = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Color.WhiteSmoke, Padding = new Padding(4, 3, 4, 3) };
+            var flpToolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(0) };
+            var btnRefreshConsole = MakeBtn("🔄 刷新"); btnRefreshConsole.Width = 65;
+            btnFetch = MakeBtn("📡 Fetch", Color.AliceBlue); btnFetch.Width = 75;
+            var toolSep1 = new Label { Width = 10, Height = 28, Text = "|", TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.LightGray };
+            btnStageAll = MakeBtn("➕ 全部暂存", Color.MintCream); btnStageAll.Width = 95;
+            btnUnstageAll = MakeBtn("➖ 全部取消", Color.Ivory); btnUnstageAll.Width = 95;
+            flpToolbar.Controls.Add(btnRefreshConsole);
+            flpToolbar.Controls.Add(btnFetch);
+            flpToolbar.Controls.Add(toolSep1);
+            flpToolbar.Controls.Add(btnStageAll);
+            flpToolbar.Controls.Add(btnUnstageAll);
+            pnlToolbar.Controls.Add(flpToolbar);
             grpDetails.Controls.Add(splitConsole);
+            grpDetails.Controls.Add(pnlToolbar);
             lvFileChanges.SelectedIndexChanged += async (_, __) => await ShowSelectedFileDiff();
             lvFileChanges.DoubleClick += async (_, __) => await ToggleStagedStatus();
             btnCommit.Click += async (_, __) => await RunDetailAction("Commit");
             btnPull.Click += async (_, __) => await RunDetailAction("Pull");
             btnPush.Click += async (_, __) => await RunDetailAction("Push");
             btnStash.Click += async (_, __) => await RunDetailAction("Stash");
+            btnFetch.Click += async (_, __) => await RunDetailAction("Fetch");
+            btnStageAll.Click += async (_, __) => await RunDetailAction("StageAll");
+            btnUnstageAll.Click += async (_, __) => await RunDetailAction("UnstageAll");
+            btnRefreshConsole.Click += async (_, __) => await RefreshRepoDetails();
+            chkAmend.CheckedChanged += (_, __) => {
+                // When Amend is checked, always allow Commit even if nothing is staged
+                if (chkAmend.Checked && !btnCommit.Enabled)
+                    btnCommit.Enabled = true;
+            };
             var fileMenu = new ContextMenuStrip();
             fileMenu.Items.Add("➕ 加入/移出 暂存区", null, async (_, __) => await ToggleStagedStatus());
             fileMenu.Items.Add("📂 打开目录", null, (_, __) => {
@@ -1023,20 +1058,27 @@ namespace GitBranchSwitcher {
                     Process.Start("explorer.exe", "/select,\"" + Path.Combine(((GitRepo)lvRepos.SelectedItems[0].Tag).Path, lvFileChanges.SelectedItems[0].SubItems[1].Text) + "\"");
             });
             var itemDiscard = fileMenu.Items.Add("🧨 还原", null, async (_, __) => {
-                if (lvFileChanges.SelectedItems.Count == 0)
+                if (lvFileChanges.SelectedItems.Count == 0 || lvRepos.SelectedItems.Count == 0)
                     return;
-                var item = lvFileChanges.SelectedItems[0];
-                if (item.Group == grpStaged) {
+                var unstagedItems = lvFileChanges.SelectedItems.Cast<ListViewItem>()
+                    .Where(i => i.Group == grpUnstaged).ToList();
+                if (unstagedItems.Count == 0) {
                     MessageBox.Show("请先 Unstage。");
                     return;
                 }
 
-                if (MessageBox.Show("确定丢弃修改？", "确认", MessageBoxButtons.YesNo) == DialogResult.Yes) {
+                string confirmMsg = unstagedItems.Count == 1
+                    ? "确定丢弃修改？"
+                    : $"确定丢弃选中的 {unstagedItems.Count} 个文件的修改？";
+                if (MessageBox.Show(confirmMsg, "确认", MessageBoxButtons.YesNo) == DialogResult.Yes) {
                     var r = (GitRepo)lvRepos.SelectedItems[0].Tag;
                     await Task.Run(() => {
-                        GitHelper.RunGit(r.Path, $"checkout -- \"{item.SubItems[1].Text}\"", 5000);
-                        if (item.Text.Contains("??"))
-                            GitHelper.RunGit(r.Path, $"clean -f \"{item.SubItems[1].Text}\"", 5000);
+                        foreach (var item in unstagedItems) {
+                            string fp = item.SubItems[1].Text;
+                            GitHelper.RunGit(r.Path, $"checkout -- \"{fp}\"", 5000);
+                            if (item.Text.Contains("??"))
+                                GitHelper.RunGit(r.Path, $"clean -f \"{fp}\"", 5000);
+                        }
                     });
                     await RefreshRepoDetails();
                 }
@@ -1478,7 +1520,7 @@ namespace GitBranchSwitcher {
             grpDetails.Enabled = true;
             var item = lvRepos.SelectedItems[0];
             var repo = (GitRepo)item.Tag;
-            lblRepoInfo.Text = $"📂 {repo.Name}  /  📍 {repo.CurrentBranch}";
+            lblRepoInfo.Text = $"📂 {repo.Name}  ·  🌿 {repo.CurrentBranch}  ·  加载中...";
             await Task.Run(() => {
                 var changes = GitHelper.GetFileChanges(repo.Path);
                 repo.IsDirty = (changes.Count > 0);
@@ -1530,8 +1572,12 @@ namespace GitBranchSwitcher {
                     lvFileChanges.EndUpdate();
                     btnPull.Text = repo.Incoming > 0? $"⬇ {repo.Incoming}" : "⬇ Pull";
                     btnPush.Text = repo.Outgoing > 0? $"⬆ {repo.Outgoing}" : "⬆ Push";
-                    btnCommit.Enabled = stagedCount > 0;
+                    btnCommit.Enabled = stagedCount > 0 || chkAmend.Checked;
                     btnCommit.Text = stagedCount > 0? $"Commit ({stagedCount})" : "Commit";
+                    string syncInfo = repo.HasUpstream
+                        ? $"  ·  ↓{repo.Incoming} ↑{repo.Outgoing}"
+                        : "  ·  (无远程)";
+                    lblRepoInfo.Text = $"📂 {repo.Name}  ·  🌿 {repo.CurrentBranch}{syncInfo}";
                     RenderRepoItem(item);
                 }));
             });
@@ -1559,10 +1605,15 @@ namespace GitBranchSwitcher {
             if (string.IsNullOrEmpty(content))
                 return;
             string[] lines = content.Split('\n');
+            int lineNum = 0;
             foreach (var line in lines) {
+                lineNum++;
+                string prefix = $"{lineNum,4}│ ";
                 int start = rtbDiff.TextLength;
-                rtbDiff.AppendText(line + "\n");
-                rtbDiff.Select(start, line.Length);
+                rtbDiff.AppendText(prefix + line + "\n");
+                rtbDiff.Select(start, prefix.Length);
+                rtbDiff.SelectionColor = Color.FromArgb(80, 80, 80);
+                rtbDiff.Select(start + prefix.Length, line.Length);
                 if (line.StartsWith("+") && !line.StartsWith("+++"))
                     rtbDiff.SelectionColor = Color.LightGreen;
                 else if (line.StartsWith("-") && !line.StartsWith("---"))
@@ -1581,14 +1632,16 @@ namespace GitBranchSwitcher {
             if (lvFileChanges.SelectedItems.Count == 0 || lvRepos.SelectedItems.Count == 0)
                 return;
             var repo = (GitRepo)lvRepos.SelectedItems[0].Tag;
-            var item = lvFileChanges.SelectedItems[0];
-            string file = item.SubItems[1].Text;
+            var items = lvFileChanges.SelectedItems.Cast<ListViewItem>().ToList();
             lvFileChanges.Enabled = false;
             await Task.Run(() => {
-                if (item.Group == grpUnstaged)
-                    GitHelper.StageFile(repo.Path, file);
-                else
-                    GitHelper.UnstageFile(repo.Path, file);
+                foreach (var item in items) {
+                    string file = item.SubItems[1].Text;
+                    if (item.Group == grpUnstaged)
+                        GitHelper.StageFile(repo.Path, file);
+                    else
+                        GitHelper.UnstageFile(repo.Path, file);
+                }
             });
             await RefreshRepoDetails();
             lvFileChanges.Enabled = true;
@@ -1602,15 +1655,17 @@ namespace GitBranchSwitcher {
             try {
                 if (action == "Commit") {
                     string msg = txtCommitMsg.Text.Trim();
-                    if (string.IsNullOrEmpty(msg)) {
+                    bool amend = chkAmend.Checked;
+                    if (!amend && string.IsNullOrEmpty(msg)) {
                         MessageBox.Show("请输入提交信息");
                         return;
                     }
 
-                    var res = await Task.Run(() => GitHelper.Commit(repo.Path, msg));
+                    var res = await Task.Run(() => GitHelper.Commit(repo.Path, msg, amend));
                     if (res.ok) {
                         txtCommitMsg.Clear();
-                        Log($"[{repo.Name}] Commit Success: {msg}");
+                        chkAmend.Checked = false;
+                        Log($"[{repo.Name}] {res.message}");
                     } else
                         MessageBox.Show(res.message);
                 } else if (action == "Stash") {
@@ -1625,8 +1680,21 @@ namespace GitBranchSwitcher {
                         Log($"[{repo.Name}] Push OK");
                     else
                         MessageBox.Show(res.msg);
+                } else if (action == "Fetch") {
+                    btnFetch.Enabled = false;
+                    btnFetch.Text = "⏳";
+                    await Task.Run(() => GitHelper.FetchFast(repo.Path));
+                    Log($"[{repo.Name}] Fetch 完成");
+                } else if (action == "StageAll") {
+                    await Task.Run(() => GitHelper.StageAll(repo.Path));
+                    Log($"[{repo.Name}] 全部加入暂存区");
+                } else if (action == "UnstageAll") {
+                    await Task.Run(() => GitHelper.UnstageAll(repo.Path));
+                    Log($"[{repo.Name}] 全部移出暂存区");
                 }
             } finally {
+                btnFetch.Text = "📡 Fetch";
+                btnFetch.Enabled = true;
                 pnlActions.Enabled = true;
                 await RefreshRepoDetails();
             }
@@ -2852,9 +2920,9 @@ namespace GitBranchSwitcher {
             return sb.ToString().Trim();
         }
 
-        private static Color GetLogColor(string text) {
+        private Color GetLogColor(string text) {
             if (string.IsNullOrWhiteSpace(text))
-                return Color.Black;
+                return txtLog.ForeColor;
 
             if (text.Contains("⚠️", StringComparison.Ordinal)
                 || text.Contains("warning", StringComparison.OrdinalIgnoreCase)
@@ -2869,7 +2937,7 @@ namespace GitBranchSwitcher {
                 || text.Contains("失败", StringComparison.OrdinalIgnoreCase))
                 return Color.Crimson;
 
-            return Color.Black;
+            return txtLog.ForeColor;
         }
 
         private void Log(string s) {
@@ -3198,7 +3266,15 @@ namespace GitBranchSwitcher {
                 }
 
                 if (darkModeChanged) {
-                    MessageBox.Show("深色模式设置已保存，重启程序后生效。", "提示");
+                    if (_settings.DarkMode) {
+                        // 开启深色模式：立即生效
+                        ThemeManager.Apply(this);
+                        ThemeManager.Apply(consoleWindow);
+                        UpdateThemeLabel();
+                    } else {
+                        // 关闭深色模式：下次启动生效（不能在运行中还原所有控件颜色）
+                        MessageBox.Show("深色模式已关闭，下次启动后生效。", "提示");
+                    }
                 } else if (needApply) {
                     UpdateThemeLabel();
                     LoadRandomFrameWorkImage();
