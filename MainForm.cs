@@ -284,7 +284,10 @@ namespace GitBranchSwitcher {
                             }
                         });
                         await Task.Delay(0); // suppress CS1998
-                        BeginInvoke((Action)(async () => await BatchSyncStatusUpdate()));
+                        BeginInvoke((Action)(async () => {
+                            await BatchSyncStatusUpdate();
+                            _ = RefreshBranchesAsync();
+                        }));
                     });
                 }
                 return true;
@@ -629,6 +632,7 @@ namespace GitBranchSwitcher {
 
                     statusLabel.Text = "Fetch 完成，正在刷新状态...";
                     await BatchSyncStatusUpdate();
+                    _ = RefreshBranchesAsync();
                 } finally {
                     statusProgress.Visible = false;
                     statusLabel.Text = "就绪";
@@ -664,6 +668,7 @@ namespace GitBranchSwitcher {
 
                     statusLabel.Text = "Fetch All 完成，正在刷新状态...";
                     await BatchSyncStatusUpdate();
+                    _ = RefreshBranchesAsync();
                 } finally {
                     statusProgress.Visible = false;
                     statusLabel.Text = "就绪";
@@ -759,7 +764,55 @@ namespace GitBranchSwitcher {
             btnUseCurrentBranch.Dock = DockStyle.Right;
             btnUseCurrentBranch.Width = 60;
 
-            // 2. [新增] "收藏" 按钮
+            // 2. [新增] 查询远端分支按钮（ls-remote，不下载 commit，只刷新分支列表）
+            var btnFetchRemoteBranches = MakeBtn("☁ 远端", Color.AliceBlue);
+            btnFetchRemoteBranches.Dock = DockStyle.Right;
+            btnFetchRemoteBranches.Width = 60;
+            btnFetchRemoteBranches.Click += async (_, __) => {
+                var paths = lvRepos.Items.Cast<ListViewItem>()
+                    .Where(i => i.Checked && i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                    .Select(i => ((GitRepo)i.Tag).Path)
+                    .ToList();
+                if (paths.Count == 0)
+                    paths = lvRepos.Items.Cast<ListViewItem>()
+                        .Where(i => i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                        .Select(i => ((GitRepo)i.Tag).Path)
+                        .ToList();
+                if (paths.Count == 0) return;
+
+                btnFetchRemoteBranches.Enabled = false;
+                btnFetchRemoteBranches.Text = "⏳";
+                statusLabel.Text = $"正在查询 {paths.Count} 个仓库的远端分支...";
+                statusProgress.Visible = true;
+                try {
+                    // ls-remote 只查远端分支名，不下载任何 commit
+                    var remoteBranches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var tasks = paths.Select(p => Task.Run(() => GitHelper.GetRemoteBranchNames(p))).ToArray();
+                    var results = await Task.WhenAll(tasks);
+                    foreach (var list in results)
+                        foreach (var b in list)
+                            remoteBranches.Add(b);
+                    // 合并进现有列表（不覆盖，只追加新分支）
+                    var before = _allBranches.Count;
+                    var merged = new HashSet<string>(_allBranches, StringComparer.OrdinalIgnoreCase);
+                    foreach (var b in remoteBranches)
+                        merged.Add(b);
+                    _allBranches = merged.OrderBy(x => x).ToList();
+                    var added = _allBranches.Count - before;
+                    UpdateBranchDropdown(openDropdown: false);
+                    Log($"[远端分支] 查询完成，共 {remoteBranches.Count} 个远端分支，新增 {added} 个");
+                    statusLabel.Text = $"远端分支已更新（+{added}）";
+                } catch (Exception ex) {
+                    Log($"[远端分支] 查询失败：{ex.Message}");
+                    statusLabel.Text = "远端分支查询失败";
+                } finally {
+                    statusProgress.Visible = false;
+                    btnFetchRemoteBranches.Text = "☁ 远端";
+                    btnFetchRemoteBranches.Enabled = true;
+                }
+            };
+
+            // 3. [新增] "收藏" 按钮
             var btnFav = MakeBtn("⭐ 收藏", Color.LightYellow); // 使用淡黄色区分
             btnFav.Dock = DockStyle.Right;
             btnFav.Width = 60;
@@ -770,10 +823,11 @@ namespace GitBranchSwitcher {
                 frm.ShowDialog(this);
             };
 
-            // 3. 将控件加入面板 (注意顺序：先加靠右的)
-            pnlComboRow.Controls.Add(btnUseCurrentBranch);               // 最右边
-            pnlComboRow.Controls.Add(btnFav);  // 收藏的左边
-            pnlComboRow.Controls.Add(cmbTargetBranch);      // 填满剩余空间
+            // 4. 将控件加入面板 (注意顺序：先加靠右的)
+            pnlComboRow.Controls.Add(btnUseCurrentBranch);          // 最右边（填入）
+            pnlComboRow.Controls.Add(btnFetchRemoteBranches);        // 填入左边（☁ 拉取）
+            pnlComboRow.Controls.Add(btnFav);                        // 拉取左边（收藏）
+            pnlComboRow.Controls.Add(cmbTargetBranch);               // 填满剩余空间
 
             var pnlSpacer1 = new Panel {
                 Height = 5, Dock = DockStyle.Top
@@ -1831,6 +1885,7 @@ namespace GitBranchSwitcher {
                     btnFetch.Text = "⏳";
                     await Task.Run(() => GitHelper.FetchFast(repo.Path));
                     Log($"[{repo.Name}] Fetch 完成");
+                    _ = RefreshBranchesAsync();
                 } else if (action == "StageAll") {
                     await Task.Run(() => GitHelper.StageAll(repo.Path));
                     Log($"[{repo.Name}] 全部加入暂存区");
@@ -1989,7 +2044,7 @@ namespace GitBranchSwitcher {
                         RenderRepoItem(item);
                     lvRepos.EndUpdate();
                     if (refreshBranchCatalog)
-                        _ = RefreshBranchesAsync(token);
+                        _ = RefreshBranchesAsync(token: token);
                     if (includeRepoDetails)
                         _ = BatchSyncStatusUpdate(token);
                     if (autoFetchAfterLoad)
@@ -2029,7 +2084,7 @@ namespace GitBranchSwitcher {
                     return;
                 BeginInvoke((Action)(() => {
                     lblFetchStatus.Text = "";
-                    _ = RefreshBranchesAsync(token);
+                    _ = RefreshBranchesAsync(token: token);
                 }));
                 await BatchSyncStatusUpdate(token);
             } catch {
@@ -2039,17 +2094,16 @@ namespace GitBranchSwitcher {
         private async Task RefreshBranchesAsync(CancellationToken token = default) {
             if (lvRepos == null || lvRepos.IsDisposed || lvRepos.Items.Count == 0)
                 return;
-            var checkedPaths = lvRepos.Items.Cast<ListViewItem>()
+            // 汇总所有勾选仓库的分支；若无勾选则取全部仓库
+            var targetPaths = lvRepos.Items.Cast<ListViewItem>()
                 .Where(i => i.Checked && i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
                 .Select(i => ((GitRepo)i.Tag).Path)
                 .ToList();
-            // 只选了一个仓库用它的分支列表，否则用第一个勾选仓库的分支列表
-            var targetPaths = checkedPaths.Count > 0
-                ? new List<string> { checkedPaths[0] }
-                : lvRepos.Items.Cast<ListViewItem>()
+            if (targetPaths.Count == 0)
+                targetPaths = lvRepos.Items.Cast<ListViewItem>()
                     .Where(i => i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
                     .Select(i => ((GitRepo)i.Tag).Path)
-                    .Take(1).ToList();
+                    .ToList();
 
             var all = new HashSet<string>();
             var tasks = new List<Task<IEnumerable<string>>>();
@@ -2473,7 +2527,7 @@ namespace GitBranchSwitcher {
             }));
 
             if (refreshBranchCatalog)
-                await RefreshBranchesAsync(token);
+                await RefreshBranchesAsync(token: token);
         }
 
         private void StartPostSwitchBackgroundWork(double gitSeconds, List<ListViewItem> items, int repoCount) {

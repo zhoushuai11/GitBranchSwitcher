@@ -75,6 +75,23 @@ namespace GitBranchSwitcher {
             return "(unknown)";
         }
 
+        // 只查询远端有哪些分支名，不下载任何 commit（git ls-remote --heads origin）
+        public static IEnumerable<string> GetRemoteBranchNames(string repoPath) {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var (code, stdout, _) = RunGit(repoPath, "ls-remote --heads origin", 10000);
+            if (code != 0) return set;
+            // 输出格式: <sha>\trefs/heads/<branch>
+            foreach (var line in stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)) {
+                var tab = line.IndexOf('\t');
+                if (tab < 0) continue;
+                var refName = line[(tab + 1)..].Trim();
+                const string prefix = "refs/heads/";
+                if (refName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    set.Add(refName[prefix.Length..]);
+            }
+            return set;
+        }
+
         public static IEnumerable<string> GetAllBranches(string repoPath) {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             {
