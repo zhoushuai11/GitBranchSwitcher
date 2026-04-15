@@ -15,6 +15,23 @@ namespace GitBranchSwitcher {
         public List<SubRepoItem> Children { get; set; } = new List<SubRepoItem>();
     }
 
+    public class SlimRecord {
+        public DateTime LastRunAt { get; set; }
+        public long BeforeBytes { get; set; }
+        public long AfterBytes { get; set; }
+        public long SavedBytes { get; set; }
+    }
+
+    public class SlimLogEntry {
+        public DateTime RunAt { get; set; }
+        public string RepoName { get; set; } = "";
+        public string RepoPath { get; set; } = "";
+        public long BeforeBytes { get; set; }
+        public long AfterBytes { get; set; }
+        public long SavedBytes { get; set; }
+        public bool Success { get; set; }
+    }
+
     public class AppSettings {
         public bool StashOnSwitch { get; set; } = true;
         public bool ReapplyStashOnSwitch { get; set; } = true;
@@ -26,6 +43,11 @@ namespace GitBranchSwitcher {
         public bool DarkMode { get; set; } = false;
         public int AutoSyncIntervalMinutes { get; set; } = 0; // 0 = 禁用自动同步
         public int AutoSyncIntervalSeconds { get; set; } = 0; // 0-59 附加秒数
+
+        // 瘦身参数
+        public int GcThreads { get; set; } = 2;          // pack.threads
+        public int GcWindowMemoryMB { get; set; } = 256; // pack.windowMemory (MB)
+        public int GcTimeoutHours { get; set; } = 3;     // -1 = 不限制
         // 键盘快捷键（存 System.Windows.Forms.Keys 枚举的 int 值）
         public int ShortcutFetchKey  { get; set; } = 116;  // Keys.F5
         public int ShortcutSwitchKey { get; set; } = 13;   // Keys.Return
@@ -36,6 +58,12 @@ namespace GitBranchSwitcher {
         public List<string> CachedBranchList { get; set; } = new List<string>();
         
         public List<FavoriteItem> FavoriteBranches { get; set; } = new List<FavoriteItem>();
+
+        // key = 仓库完整路径，value = 最近一次瘦身记录
+        public Dictionary<string, SlimRecord> SlimHistory { get; set; } = new Dictionary<string, SlimRecord>();
+
+        // 全量历史日志，保留最近 500 条
+        public List<SlimLogEntry> SlimLog { get; set; } = new List<SlimLogEntry>();
         
         // [修改] 路径配置：更新为新的共享地址
         public string LeaderboardPath { get; set; } = @"\\s4.biubiubiu.io\share\rank.json";
@@ -85,6 +113,10 @@ namespace GitBranchSwitcher {
                 s.CachedBranchList = new List<string>();
             if (s.ParentPaths == null)
                 s.ParentPaths = new List<string>();
+            if (s.SlimHistory == null)
+                s.SlimHistory = new Dictionary<string, SlimRecord>();
+            if (s.SlimLog == null)
+                s.SlimLog = new List<SlimLogEntry>();
 
             s.CheckDateReset();
             return s;

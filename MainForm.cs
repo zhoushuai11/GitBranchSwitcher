@@ -515,9 +515,9 @@ namespace GitBranchSwitcher {
             var btnRank = MakeBtn("🏆 排行榜", Color.Ivory);
             btnRank.ForeColor = Color.DarkGoldenrod;
 #endif
-            var btnSuperSlim = MakeBtn("🔥 一键瘦身", Color.MistyRose);
+            var btnSuperSlim = MakeBtn("💃 瘦身", Color.MistyRose);
             btnSuperSlim.ForeColor = Color.DarkRed;
-            
+
             // [新增] 设置按钮
             var btnSettings = MakeBtn("⚙️ 设置", Color.WhiteSmoke);
             btnSettings.ForeColor = Color.DimGray;
@@ -679,7 +679,7 @@ namespace GitBranchSwitcher {
 #if !BOSS_MODE && !PURE_MODE
             btnRank.Click += (_, __) => ShowLeaderboard();
 #endif
-            btnSuperSlim.Click += (_, __) => StartSuperSlimProcess();
+            btnSuperSlim.Click += (_, __) => ShowSlimDialog();
             var listMenu = new ContextMenuStrip();
             listMenu.Items.Add("📂 打开文件夹", null, (_, __) => {
                 if (lvRepos.SelectedItems.Count > 0)
@@ -3154,40 +3154,293 @@ namespace GitBranchSwitcher {
         }
 
         private async void StartSuperSlimProcess() {
-            if (MessageBox.Show("【一键瘦身】将执行深度 GC，非常耗时。\n建议下班挂机执行。是否继续？", "确认 (1/2)", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+            // ── 从仓库列表取勾选的仓库 ────────────────────────
+            var checkedRepos = lvRepos.Items.Cast<ListViewItem>()
+                .Where(i => i.Checked)
+                .Select(i => (GitRepo)i.Tag)
+                .ToList();
+            if (checkedRepos.Count == 0) {
+                MessageBox.Show("请先在仓库列表中勾选要瘦身的仓库。");
                 return;
-            if (MessageBox.Show("CPU 将会满载。\n真的要继续吗？", "确认 (2/2)", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
-                return;
-            var selectedParents = ShowParentSelectionDialog();
-            if (selectedParents.Count == 0)
-                return;
-            this.Enabled = false;
-            long totalSavedBytes = 0;
-            foreach (var parent in selectedParents) {
-                var cache = _settings.RepositoryCache.FirstOrDefault(x => string.Equals(x.ParentPath, parent, StringComparison.OrdinalIgnoreCase));
-                if (cache == null || cache.Children.Count == 0)
-                    continue;
-                Log($"=== 清理父节点: {Path.GetFileName(parent)} ===");
-                foreach (var repoInfo in cache.Children) {
-                    Log($" >>> [清理中] {repoInfo.Name} ...");
-                    statusLabel.Text = $"正在瘦身: {repoInfo.Name}";
-                    var (ok, log, sizeStr, saved) = await Task.Run(() => GitHelper.GarbageCollect(repoInfo.FullPath, false));
-                    if (ok) {
-                        totalSavedBytes += saved;
-                        Log($"[成功] {repoInfo.Name}: 减小 {sizeStr}");
-                    } else
-                        Log($"[失败] {repoInfo.Name}");
+            }
+            var allRepos = checkedRepos.Select(r => (r.Name, r.Path)).ToList();
+
+            // ── 空间检查弹窗 ──────────────────────────────────
+            {
+                statusLabel.Text = "正在扫描仓库大小...";
+                var sizeRows = new List<(string name, string path, string driveRoot, long packBytes, long gitBytes)>();
+                await Task.Run(() => {
+                    foreach (var (name, path) in allRepos) {
+                        var (packBytes, gitBytes) = GitHelper.GetRepoSizeInfo(path);
+                        string driveRoot = Path.GetPathRoot(path) ?? path;
+                        sizeRows.Add((name, path, driveRoot, packBytes, gitBytes));
+                    }
+                });
+                statusLabel.Text = "就绪";
+
+                long totalPack = sizeRows.Sum(r => r.packBytes);
+                long needed = (long)(totalPack * 1.5);
+
+                var drivesFree = sizeRows
+                    .GroupBy(r => r.driveRoot, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => { try { return new DriveInfo(g.Key).AvailableFreeSpace; } catch { return -1L; } },
+                        StringComparer.OrdinalIgnoreCase);
+
+                long minFree = drivesFree.Values.Where(v => v >= 0).DefaultIfEmpty(0).Min();
+                bool spaceOk = drivesFree.All(kv => {
+                    long packOnDrive = sizeRows.Where(r => r.driveRoot.Equals(kv.Key, StringComparison.OrdinalIgnoreCase)).Sum(r => r.packBytes);
+                    return kv.Value < 0 || kv.Value >= (long)(packOnDrive * 1.5);
+                });
+
+                var spaceDlg = new Form {
+                    Text = "🔥 一键瘦身 - 空间预检",
+                    Width = 700, Height = 470,
+                    StartPosition = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    MaximizeBox = false, MinimizeBox = false
+                };
+
+                var lv = new ListView {
+                    Left = 12, Top = 12, Width = 660, Height = 230,
+                    View = View.Details, FullRowSelect = true,
+                    GridLines = true, BorderStyle = BorderStyle.FixedSingle
+                };
+                lv.Columns.Add("仓库", 180);
+                lv.Columns.Add("Pack 大小", 95);
+                lv.Columns.Add(".git 总大小", 95);
+                lv.Columns.Add("上次瘦身", 115);
+                lv.Columns.Add("优化了", 85);
+                lv.Columns.Add("磁盘", 72);
+                foreach (var row in sizeRows.OrderByDescending(r => r.packBytes)) {
+                    _settings.SlimHistory.TryGetValue(row.path, out var hist);
+                    string lastRun = hist == null ? "从未" : hist.LastRunAt.ToString("yyyy/M/d");
+                    string histSavedStr = hist == null ? "—" : FormatSize(hist.SavedBytes);
+
+                    var item = new ListViewItem(row.name);
+                    item.SubItems.Add(row.packBytes > 0 ? FormatSize(row.packBytes) : "—");
+                    item.SubItems.Add(row.gitBytes > 0 ? FormatSize(row.gitBytes) : "—");
+                    item.SubItems.Add(lastRun);
+                    item.SubItems.Add(histSavedStr);
+                    item.SubItems.Add(row.driveRoot);
+                    if (row.packBytes > 5L * 1024 * 1024 * 1024)
+                        item.ForeColor = Color.DarkOrange;
+                    lv.Items.Add(item);
                 }
+
+                var pnlSummary = new Panel { Left = 12, Top = 252, Width = 660, Height = 110 };
+                int sy = 0;
+                void SumLabel(string text, Color color) {
+                    pnlSummary.Controls.Add(new Label {
+                        Text = text, Left = 0, Top = sy, Width = 660, AutoSize = false, Height = 22,
+                        ForeColor = color, Font = new Font("Segoe UI", 9.5f)
+                    });
+                    sy += 22;
+                }
+                SumLabel($"合计 Pack 大小：{FormatSize(totalPack)}", Color.Black);
+                SumLabel($"预计所需临时空间：~{FormatSize(needed)}（1.5 倍 Pack）", Color.DimGray);
+                foreach (var kv in drivesFree) {
+                    long packOnDrive = sizeRows.Where(r => r.driveRoot.Equals(kv.Key, StringComparison.OrdinalIgnoreCase)).Sum(r => r.packBytes);
+                    long neededOnDrive = (long)(packOnDrive * 1.5);
+                    bool driveOk = kv.Value < 0 || kv.Value >= neededOnDrive;
+                    string status = kv.Value < 0 ? "无法读取" :
+                        driveOk ? $"✅ 充足（可用 {FormatSize(kv.Value)}，需 {FormatSize(neededOnDrive)}）" :
+                                  $"❌ 不足（可用 {FormatSize(kv.Value)}，需 {FormatSize(neededOnDrive)}）";
+                    SumLabel($"磁盘 {kv.Key}  {status}", driveOk ? Color.DarkGreen : Color.DarkRed);
+                }
+
+                var btnGo = new Button {
+                    Text = spaceOk ? "继续" : "仍然继续（风险自担）",
+                    Left = 468, Top = 390, Width = 110, Height = 30,
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = spaceOk ? Color.Honeydew : Color.MistyRose,
+                    ForeColor = spaceOk ? Color.DarkGreen : Color.DarkRed,
+                    DialogResult = DialogResult.OK
+                };
+                var btnAbort = new Button {
+                    Text = "取消", Left = 586, Top = 390, Width = 86, Height = 30,
+                    DialogResult = DialogResult.Cancel
+                };
+                spaceDlg.Controls.Add(lv);
+                spaceDlg.Controls.Add(pnlSummary);
+                spaceDlg.Controls.Add(btnGo);
+                spaceDlg.Controls.Add(btnAbort);
+                spaceDlg.AcceptButton = btnGo;
+                spaceDlg.CancelButton = btnAbort;
+                if (spaceDlg.ShowDialog(this) != DialogResult.OK) return;
             }
 
-            this.Enabled = true;
-            statusLabel.Text = "清理完成";
+            // ── 选项弹窗 ──────────────────────────────────────
+            bool deleteBranches = false;
+            {
+                var optDlg = new Form {
+                    Text = "🔥 一键瘦身",
+                    Width = 420, Height = 210,
+                    StartPosition = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    MaximizeBox = false, MinimizeBox = false
+                };
+                var lblInfo = new Label {
+                    Text = $"将对 {allRepos.Count} 个仓库依次执行 GC（重新打包，清理 Stash）。",
+                    Left = 16, Top = 16, Width = 375, Height = 36, AutoSize = false
+                };
+                var chkBranch = new CheckBox {
+                    Text = "同时删除所有本地历史分支（保留当前分支）",
+                    Left = 16, Top = 58, Width = 375, AutoSize = true
+                };
+                var lblWarn = new Label {
+                    Text = "⚠️ 适合美术资源库，可显著释放空间；纯代码库效果有限。",
+                    Left = 34, Top = 82, Width = 360, Height = 30, AutoSize = false,
+                    ForeColor = Color.DarkOrange, Font = new Font("Segoe UI", 8.5f)
+                };
+                var btnStart = new Button {
+                    Text = "开始", DialogResult = DialogResult.OK,
+                    Width = 90, Height = 30, Left = 220, Top = 130
+                };
+                var btnCancel = new Button {
+                    Text = "取消", DialogResult = DialogResult.Cancel,
+                    Width = 90, Height = 30, Left = 318, Top = 130
+                };
+                optDlg.Controls.AddRange(new Control[] { lblInfo, chkBranch, lblWarn, btnStart, btnCancel });
+                optDlg.AcceptButton = btnStart;
+                optDlg.CancelButton = btnCancel;
+                if (optDlg.ShowDialog(this) != DialogResult.OK) return;
+                deleteBranches = chkBranch.Checked;
+            }
+
+            var cts = new System.Threading.CancellationTokenSource();
+            long totalSaved = 0;
+            bool isDone = false;
+
+            // ── 进度弹窗 ──────────────────────────────────────
+            var dlg = new Form {
+                Text = "🔥 一键瘦身",
+                Width = 640, Height = 500,
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false, MinimizeBox = false
+            };
+            var lblProgress = new Label {
+                Dock = DockStyle.Top, Height = 38,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(10, 0, 0, 0),
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Text = $"准备中... (共 {allRepos.Count} 个仓库)"
+            };
+            var bar = new ProgressBar {
+                Dock = DockStyle.Top, Height = 8,
+                Minimum = 0, Maximum = allRepos.Count,
+                Style = ProgressBarStyle.Continuous
+            };
+            var rtbSlim = new RichTextBox {
+                Dock = DockStyle.Fill,
+                Font = new Font("Consolas", 9),
+                ReadOnly = true,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.Gainsboro,
+                BorderStyle = BorderStyle.None
+            };
+            var pnlFoot = new Panel { Dock = DockStyle.Bottom, Height = 42, Padding = new Padding(8, 5, 8, 5) };
+            var lblSum = new Label { Dock = DockStyle.Left, AutoSize = false, Width = 300, TextAlign = ContentAlignment.MiddleLeft };
+            var btnCC = new Button {
+                Text = "⛔ 取消", Dock = DockStyle.Right, Width = 110, Height = 30,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.MistyRose, ForeColor = Color.DarkRed
+            };
+            btnCC.FlatAppearance.BorderColor = Color.LightCoral;
+            pnlFoot.Controls.Add(lblSum);
+            pnlFoot.Controls.Add(btnCC);
+            dlg.Controls.Add(rtbSlim);
+            dlg.Controls.Add(bar);
+            dlg.Controls.Add(lblProgress);
+            dlg.Controls.Add(pnlFoot);
+
+            void AppendLog(string s) {
+                if (dlg.IsDisposed) return;
+                dlg.BeginInvoke((Action)(() => { rtbSlim.AppendText(s + "\n"); rtbSlim.ScrollToCaret(); }));
+            }
+
+            btnCC.Click += (_, __) => {
+                if (isDone) { dlg.Close(); return; }
+                cts.Cancel();
+                GitHelper.CancelAllRunningGitOps();
+                btnCC.Text = "⏳ 等当前仓库完成...";
+                btnCC.Enabled = false;
+            };
+            dlg.FormClosing += (_, e) => { if (!isDone) e.Cancel = true; };
+            dlg.Show(this);
+
+            // ── 逐仓库执行 ───────────────────────────────────
+            for (int i = 0; i < allRepos.Count; i++) {
+                if (cts.Token.IsCancellationRequested) break;
+                var (name, path) = allRepos[i];
+                int idx = i + 1;
+                dlg.BeginInvoke((Action)(() => {
+                    lblProgress.Text = $"[{idx}/{allRepos.Count}] 正在处理: {name}";
+                    bar.Value = i;
+                }));
+                AppendLog($"\n=== [{idx}/{allRepos.Count}] {name} ===");
+
+                if (deleteBranches) {
+                    AppendLog("  > 清理本地历史分支...");
+                    var (deleted, skipped) = await Task.Run(() =>
+                        GitHelper.DeleteLocalBranches(path, line => AppendLog(line)));
+                    AppendLog($"  已删除 {deleted} 个分支，跳过 {skipped} 个");
+                }
+
+                var (ok, gcLog, sizeStr, saved, beforeBytes, afterBytes) = await Task.Run(() =>
+                    GitHelper.GarbageCollect(path, false, _settings.GcThreads, _settings.GcWindowMemoryMB, _settings.GcTimeoutHours, line => AppendLog("  " + line)));
+                totalSaved += Math.Max(0, saved);
+                AppendLog(ok ? $"  ✅ 减小: {sizeStr}" : $"  ❌ GC 失败: {gcLog.Trim()}");
+
+                // 追加全量日志（成功失败都记录）
+                _settings.SlimLog.Add(new SlimLogEntry {
+                    RunAt = DateTime.Now,
+                    RepoName = name,
+                    RepoPath = path,
+                    BeforeBytes = beforeBytes,
+                    AfterBytes = ok ? afterBytes : beforeBytes,
+                    SavedBytes = ok ? Math.Max(0, saved) : 0,
+                    Success = ok
+                });
+                if (_settings.SlimLog.Count > 500)
+                    _settings.SlimLog.RemoveRange(0, _settings.SlimLog.Count - 500);
+
+                // 更新快速查询表（仅成功时）
+                if (ok) {
+                    _settings.SlimHistory[path] = new SlimRecord {
+                        LastRunAt = DateTime.Now,
+                        BeforeBytes = beforeBytes,
+                        AfterBytes = afterBytes,
+                        SavedBytes = Math.Max(0, saved)
+                    };
+                }
+                _settings.Save();
+            }
+
+            // ── 完成 ─────────────────────────────────────────
+            isDone = true;
+            bool cancelled = cts.IsCancellationRequested;
+            string savedStr = FormatSize(totalSaved);
+            dlg.BeginInvoke((Action)(() => {
+                bar.Value = cancelled ? bar.Value : allRepos.Count;
+                lblProgress.Text = cancelled
+                    ? $"已取消（已处理 {bar.Value}/{allRepos.Count} 个）"
+                    : $"✅ 全部完成！共 {allRepos.Count} 个仓库";
+                lblSum.Text = $"合计节省: {savedStr}";
+                btnCC.Text = "关闭";
+                btnCC.Enabled = true;
+                btnCC.BackColor = Color.Honeydew;
+                btnCC.ForeColor = Color.DarkGreen;
+                btnCC.FlatAppearance.BorderColor = Color.MediumSeaGreen;
+            }));
+            statusLabel.Text = cancelled ? "瘦身已取消" : $"瘦身完成，节省 {savedStr}";
 #if !BOSS_MODE && !PURE_MODE
-            if (!string.IsNullOrEmpty(_settings.LeaderboardPath)) {
-                await LeaderboardService.UploadMyScoreAsync(0, totalSavedBytes, null, null);
+            if (!cancelled && !string.IsNullOrEmpty(_settings.LeaderboardPath)) {
+                await LeaderboardService.UploadMyScoreAsync(0, totalSaved, null, null);
             }
 #endif
-            MessageBox.Show($"🎉 清理完毕！\n节省空间: {FormatSize(totalSavedBytes)}", "完成");
         }
 
         private List<string> ShowParentSelectionDialog() {
@@ -3226,6 +3479,192 @@ namespace GitBranchSwitcher {
         }
 
         // [重写] MainForm.cs -> ShowThemeSettingsDialog 方法
+        private void ShowSlimDialog() {
+            var dlg = new Form {
+                Text = "💃 瘦身",
+                Width = 760, Height = 600,
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false
+            };
+
+            // ── 顶部：历史记录 ListView ──
+            var lv = new ListView {
+                Dock = DockStyle.Fill,
+                View = View.Details,
+                FullRowSelect = true,
+                GridLines = true,
+                BorderStyle = BorderStyle.None
+            };
+            lv.Columns.Add("时间", 130);
+            lv.Columns.Add("仓库", 160);
+            lv.Columns.Add("原大小", 100);
+            lv.Columns.Add("瘦身后", 100);
+            lv.Columns.Add("节约", 100);
+            lv.Columns.Add("状态", 100);
+
+            long totalSaved = 0;
+            if (_settings.SlimLog.Count == 0) {
+                var emptyItem = new ListViewItem("暂无记录");
+                emptyItem.ForeColor = Color.Gray;
+                lv.Items.Add(emptyItem);
+            } else {
+                foreach (var entry in _settings.SlimLog.OrderByDescending(e => e.RunAt)) {
+                    var item = new ListViewItem(entry.RunAt.ToString("yyyy/M/d HH:mm"));
+                    item.SubItems.Add(entry.RepoName);
+                    item.SubItems.Add(entry.BeforeBytes > 0 ? FormatSize(entry.BeforeBytes) : "—");
+                    item.SubItems.Add(entry.Success ? FormatSize(entry.AfterBytes) : "—");
+                    item.SubItems.Add(entry.Success && entry.SavedBytes > 0 ? FormatSize(entry.SavedBytes) : "—");
+                    item.SubItems.Add(entry.Success ? "✅ 成功" : "❌ 失败");
+                    if (!entry.Success)
+                        item.ForeColor = Color.DarkRed;
+                    else if (entry.SavedBytes > 1L * 1024 * 1024 * 1024)
+                        item.ForeColor = Color.DarkGreen;
+                    totalSaved += entry.SavedBytes;
+                    lv.Items.Add(item);
+                }
+            }
+
+            // ── 统计标签 ──
+            var lblTotal = new Label {
+                Dock = DockStyle.Top,
+                Height = 28,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(8, 0, 0, 0),
+                Text = _settings.SlimLog.Count > 0
+                    ? $"历史合计节省：{FormatSize(totalSaved)}（共 {_settings.SlimLog.Count} 条记录）"
+                    : "还没有瘦身记录。",
+                Font = new Font("Segoe UI", 9, FontStyle.Regular),
+                ForeColor = Color.DimGray
+            };
+
+            // 顶部 panel 包含 ListView + 统计行
+            var pnlHistory = new Panel { Dock = DockStyle.Fill };
+            pnlHistory.Controls.Add(lv);
+            pnlHistory.Controls.Add(lblTotal);
+
+            // ── 中间：GC 参数配置 ──
+            var pnlConfig = new Panel { Dock = DockStyle.Bottom, Height = 42, Padding = new Padding(16, 8, 16, 0) };
+            var flowCfg = new FlowLayoutPanel {
+                Dock = DockStyle.Fill, AutoSize = false,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false
+            };
+
+            Label MakeLbl(string t) => new Label { Text = t, AutoSize = true, Anchor = AnchorStyles.None, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(0, 4, 4, 0) };
+            NumericUpDown MakeNud(decimal val, decimal min, decimal max, int w) {
+                var nud = new NumericUpDown { Minimum = min, Maximum = max, Width = w, Margin = new Padding(0, 2, 12, 0) };
+                nud.Value = Math.Clamp(val, min, max);
+                return nud;
+            }
+
+            var nudThreads = MakeNud(_settings.GcThreads, 1, 64, 55);
+            var nudMemory  = MakeNud(_settings.GcWindowMemoryMB, 64, 8192, 65);
+            var nudTimeout = MakeNud(_settings.GcTimeoutHours <= 0 ? 0 : _settings.GcTimeoutHours, 0, 72, 55);
+
+            flowCfg.Controls.Add(MakeLbl("CPU核数:"));
+            flowCfg.Controls.Add(nudThreads);
+            flowCfg.Controls.Add(MakeLbl("内存限制:"));
+            flowCfg.Controls.Add(nudMemory);
+            flowCfg.Controls.Add(MakeLbl("MB    超时:"));
+            flowCfg.Controls.Add(nudTimeout);
+            flowCfg.Controls.Add(MakeLbl("小时 (0=不限)"));
+
+            nudThreads.ValueChanged += (_, __) => { _settings.GcThreads = (int)nudThreads.Value; _settings.Save(); };
+            nudMemory.ValueChanged  += (_, __) => { _settings.GcWindowMemoryMB = (int)nudMemory.Value; _settings.Save(); };
+            nudTimeout.ValueChanged += (_, __) => { _settings.GcTimeoutHours = (int)nudTimeout.Value; _settings.Save(); };
+
+            // 清除临时文件按钮（放在配置行右侧）
+            var btnCleanTmp = new Button {
+                Text = "🗑️ 清除临时文件", AutoSize = true, Height = 26,
+                Margin = new Padding(20, 1, 0, 0),
+                FlatStyle = FlatStyle.Flat
+            };
+            btnCleanTmp.FlatAppearance.BorderSize = 1;
+            btnCleanTmp.Click += (_, __) => {
+                var repos = lvRepos.Items.Cast<ListViewItem>()
+                    .Where(i => i.Checked)
+                    .Select(i => ((GitRepo)i.Tag).Path)
+                    .ToList();
+                if (repos.Count == 0) {
+                    MessageBox.Show("请先在仓库列表中勾选要清理的仓库。", "清除临时文件", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var logDlg = new Form {
+                    Text = "清除临时文件 - 日志",
+                    Width = 800, Height = 500,
+                    StartPosition = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.SizableToolWindow
+                };
+                var rtb = new RichTextBox {
+                    Dock = DockStyle.Fill,
+                    Font = new Font("Consolas", 9),
+                    ReadOnly = true,
+                    BackColor = Color.FromArgb(30, 30, 30),
+                    ForeColor = Color.LightGray,
+                    ScrollBars = RichTextBoxScrollBars.Vertical
+                };
+                logDlg.Controls.Add(rtb);
+                logDlg.Show(this);
+                void Log(string s) { rtb.AppendText(s + "\n"); rtb.ScrollToCaret(); Application.DoEvents(); }
+
+                int totalFiles = 0; long totalBytes = 0;
+                foreach (var p in repos) {
+                    string pd = Path.Combine(p, ".git", "objects", "pack");
+                    Log($"【{Path.GetFileName(p)}】  {pd}");
+                    if (!Directory.Exists(pd)) { Log("  目录不存在\n"); continue; }
+
+                    // 只删 tmp_pack_* 文件，其他 pack 文件一律不动
+                    var tmpFiles = Directory.GetFiles(pd, "tmp_pack_*");
+                    Log($"  找到 tmp_pack_* 文件: {tmpFiles.Length} 个");
+                    int repoFiles = 0; long repoBytes = 0;
+                    foreach (var f in tmpFiles) {
+                        try {
+                            long sz = new FileInfo(f).Length;
+                            File.SetAttributes(f, FileAttributes.Normal);
+                            File.Delete(f);
+                            repoBytes += sz; repoFiles++;
+                            Log($"  🗑 {Path.GetFileName(f)}  ({FormatSize(sz)})");
+                        } catch (Exception ex) {
+                            Log($"  ❌ {Path.GetFileName(f)}: {ex.Message}");
+                        }
+                    }
+                    Log($"  → 清理 {repoFiles} 个，释放 {FormatSize(repoBytes)}\n");
+                    totalFiles += repoFiles; totalBytes += repoBytes;
+                }
+                Log($"==================");
+                Log($"合计释放: {FormatSize(totalBytes)}（{totalFiles} 个文件）");
+            };
+            flowCfg.Controls.Add(btnCleanTmp);
+
+            pnlConfig.Controls.Add(flowCfg);
+
+            // ── 底部：大按钮 ──
+            var pnlBottom = new Panel { Dock = DockStyle.Bottom, Height = 80, Padding = new Padding(20, 14, 20, 14) };
+            var btnGo = new Button {
+                Text = "🔥 一键瘦身",
+                Dock = DockStyle.Fill,
+                Font = new Font("Segoe UI", 14, FontStyle.Bold),
+                BackColor = Color.MistyRose,
+                ForeColor = Color.DarkRed,
+                FlatStyle = FlatStyle.Flat
+            };
+            btnGo.FlatAppearance.BorderSize = 0;
+            btnGo.Click += (_, __) => {
+                dlg.DialogResult = DialogResult.OK;
+                dlg.Close();
+                StartSuperSlimProcess();
+            };
+            pnlBottom.Controls.Add(btnGo);
+
+            dlg.Controls.Add(pnlHistory);
+            dlg.Controls.Add(pnlConfig);
+            dlg.Controls.Add(pnlBottom);
+            if (_settings.DarkMode) ThemeManager.Apply(dlg);
+            dlg.ShowDialog(this);
+        }
+
         private void ShowThemeSettingsDialog() {
             string rootPath = _settings.FrameWorkImgPath;
 
