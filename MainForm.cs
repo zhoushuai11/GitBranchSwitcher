@@ -88,6 +88,7 @@ namespace GitBranchSwitcher {
         private int _loadSeq = 0;
         private bool _isUpdatingTargetBranchDropdown = false;
         private bool _suppressParentItemCheck = false;
+        private bool _suppressRepoItemCheck = false;
         private HashSet<string> _checkedParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private GitWorkflowService _workflowService;
 
@@ -268,9 +269,9 @@ namespace GitBranchSwitcher {
             if (keyData == (Keys)_settings.ShortcutFetchKey) {
                 if (btnSwitchAll.Enabled && lvRepos.Items.Count > 0) {
                     var targets = lvRepos.Items.Cast<ListViewItem>()
-                        .Where(i => i.Checked).ToList();
+                        .Where(i => i.Checked && i.Tag is GitRepo repo && !repo.IsIgnored).ToList();
                     if (!targets.Any())
-                        targets = lvRepos.Items.Cast<ListViewItem>().ToList();
+                        targets = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Tag is GitRepo repo && !repo.IsIgnored).ToList();
                     Action<string> fetchLogger = line => BeginInvoke((Action)(() => Log(line)));
                     _ = Task.Run(async () => {
                         var opts = new ParallelOptions { MaxDegreeOfParallelism = 12 };
@@ -566,15 +567,40 @@ namespace GitBranchSwitcher {
             splitMiddle.Panel1.Controls.Add(grpList);
 
             lvRepos.SelectedIndexChanged += async (_, __) => await RefreshRepoDetails();
+            lvRepos.MouseDown += (_, e) => {
+                if (e.Button != MouseButtons.Right)
+                    return;
+                var hitItem = lvRepos.GetItemAt(e.X, e.Y);
+                if (hitItem == null)
+                    return;
+                if (!hitItem.Selected) {
+                    lvRepos.SelectedItems.Clear();
+                    hitItem.Selected = true;
+                }
+            };
+            lvRepos.ItemCheck += (_, e) => {
+                if (_suppressRepoItemCheck)
+                    return;
+                if (e.Index >= 0 && e.Index < lvRepos.Items.Count && lvRepos.Items[e.Index].Tag is GitRepo repo && repo.IsIgnored)
+                    e.NewValue = CheckState.Unchecked;
+            };
 
             btnToggleSelect.Click += (_, __) => {
-                bool hasUn = lvRepos.Items.Cast<ListViewItem>().Any(i => !i.Checked);
+                var activeItems = lvRepos.Items
+                    .Cast<ListViewItem>()
+                    .Where(i => i.Tag is GitRepo repo && !repo.IsIgnored)
+                    .ToList();
+                bool hasUn = activeItems.Any(i => !i.Checked);
                 lvRepos.BeginUpdate();
-                foreach (ListViewItem i in lvRepos.Items)
+                _suppressRepoItemCheck = true;
+                foreach (ListViewItem i in activeItems)
                     i.Checked = hasUn;
+                foreach (ListViewItem i in lvRepos.Items.Cast<ListViewItem>().Where(i => i.Tag is GitRepo repo && repo.IsIgnored))
+                    i.Checked = false;
+                _suppressRepoItemCheck = false;
                 lvRepos.EndUpdate();
                 if (hasUn) {
-                    var topBranch = lvRepos.Items.Cast<ListViewItem>().Select(i => ((GitRepo)i.Tag).CurrentBranch).Where(b => !string.IsNullOrEmpty(b) && b != "—").GroupBy(b => b).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+                    var topBranch = activeItems.Select(i => ((GitRepo)i.Tag).CurrentBranch).Where(b => !string.IsNullOrEmpty(b) && b != "—").GroupBy(b => b).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
                     if (!string.IsNullOrEmpty(topBranch)) {
                         cmbTargetBranch.Text = topBranch;
                     }
@@ -601,7 +627,7 @@ namespace GitBranchSwitcher {
                 }
             };
             btnRepoFetch.Click += async (_, __) => {
-                var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
+                var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked && i.Tag is GitRepo repo && !repo.IsIgnored).ToList();
                 if (!items.Any()) {
                     MessageBox.Show("请先勾选需要 Fetch 的仓库");
                     return;
@@ -640,7 +666,7 @@ namespace GitBranchSwitcher {
                 }
             };
             btnFetchAll.Click += async (_, __) => {
-                var items = lvRepos.Items.Cast<ListViewItem>().ToList();
+                var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Tag is GitRepo repo && !repo.IsIgnored).ToList();
                 if (!items.Any()) {
                     MessageBox.Show("没有仓库可 Fetch");
                     return;
@@ -724,6 +750,23 @@ namespace GitBranchSwitcher {
                     this.Enabled = true;
                 }
             });
+            listMenu.Items.Add(new ToolStripSeparator());
+            var removeRepoMenuItem = listMenu.Items.Add("\u4ece\u63a7\u5236\u5217\u8868\u79fb\u9664(\u7f6e\u7070)", null, async (_, __) => {
+                await RemoveSelectedReposFromControlAsync();
+            });
+            var restoreRepoMenuItem = listMenu.Items.Add("\u8fd8\u539f\u63a7\u5236\u8fd9\u4e2a\u4ed3\u5e93", null, async (_, __) => {
+                await RestoreSelectedReposToControlAsync();
+            });
+            listMenu.Opening += (_, __) => {
+                var selectedRepos = lvRepos.SelectedItems
+                    .Cast<ListViewItem>()
+                    .Select(i => i.Tag as GitRepo)
+                    .Where(r => r != null)
+                    .Cast<GitRepo>()
+                    .ToList();
+                removeRepoMenuItem.Enabled = selectedRepos.Any(r => !r.IsIgnored);
+                restoreRepoMenuItem.Enabled = selectedRepos.Any(r => r.IsIgnored);
+            };
             lvRepos.ContextMenuStrip = listMenu;
 
             // ==========================================
@@ -770,12 +813,12 @@ namespace GitBranchSwitcher {
             btnFetchRemoteBranches.Width = 60;
             btnFetchRemoteBranches.Click += async (_, __) => {
                 var paths = lvRepos.Items.Cast<ListViewItem>()
-                    .Where(i => i.Checked && i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                    .Where(i => i.Checked && i.Tag is GitRepo r && !r.IsIgnored && !string.IsNullOrEmpty(r.Path))
                     .Select(i => ((GitRepo)i.Tag).Path)
                     .ToList();
                 if (paths.Count == 0)
                     paths = lvRepos.Items.Cast<ListViewItem>()
-                        .Where(i => i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                        .Where(i => i.Tag is GitRepo r && !r.IsIgnored && !string.IsNullOrEmpty(r.Path))
                         .Select(i => ((GitRepo)i.Tag).Path)
                         .ToList();
                 if (paths.Count == 0) return;
@@ -993,7 +1036,7 @@ namespace GitBranchSwitcher {
             splitUpper.Panel2.Controls.Add(splitMiddle);
 
             btnUseCurrentBranch.Click += (_, __) => {
-                var item = lvRepos.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Checked);
+                var item = lvRepos.Items.Cast<ListViewItem>().FirstOrDefault(i => i.Checked && i.Tag is GitRepo repo && !repo.IsIgnored);
                 if (item == null) {
                     MessageBox.Show("请先勾选");
                     return;
@@ -1052,7 +1095,7 @@ namespace GitBranchSwitcher {
                 statusLabel.Text = "⏱ 自动 Fetch 中...";
                 statusProgress.Visible = true;
                 Action<string> fetchLogger = line => BeginInvoke((Action)(() => Log(line)));
-                var items = lvRepos.Items.Cast<ListViewItem>().ToList();
+                var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Tag is GitRepo repo && !repo.IsIgnored).ToList();
                 try {
                     await Task.Run(() => {
                         var opts = new ParallelOptions { MaxDegreeOfParallelism = 12 };
@@ -1321,10 +1364,14 @@ namespace GitBranchSwitcher {
                     return;
                 var item = lvRepos.SelectedItems[0];
                 var repo = (GitRepo)item.Tag;
+                if (repo.IsIgnored)
+                    return;
                 lvRepos.BeginUpdate();
+                _suppressRepoItemCheck = true;
                 foreach (ListViewItem i in lvRepos.Items) {
-                    i.Checked = (i == item);
+                    i.Checked = i == item && i.Tag is GitRepo r && !r.IsIgnored;
                 }
+                _suppressRepoItemCheck = false;
 
                 lvRepos.EndUpdate();
                 if (!string.IsNullOrEmpty(repo.CurrentBranch) && repo.CurrentBranch != "—") {
@@ -1552,8 +1599,24 @@ namespace GitBranchSwitcher {
             bool dark = _settings.DarkMode;
             Color defaultTextColor = dark ? ThemeManager.TextPrimary : Color.Black;
             item.BackColor = lvRepos.BackColor;
+            item.ForeColor = defaultTextColor;
+            foreach (ListViewItem.ListViewSubItem subItem in item.SubItems)
+                subItem.ForeColor = defaultTextColor;
             item.SubItems[0].ForeColor = defaultTextColor;
             item.SubItems[0].Font = item.Font;
+
+            if (repo.IsIgnored) {
+                Color ignoredBack = dark ? Color.FromArgb(0x2A, 0x2A, 0x2A) : Color.FromArgb(0xF1, 0xF1, 0xF1);
+                Color ignoredText = dark ? Color.FromArgb(0x88, 0x88, 0x88) : Color.Gray;
+                item.Text = "\u5df2\u5ffd\u7565";
+                item.BackColor = ignoredBack;
+                item.ForeColor = ignoredText;
+                foreach (ListViewItem.ListViewSubItem subItem in item.SubItems)
+                    subItem.ForeColor = ignoredText;
+                item.SubItems[2].Text = "\u4e0d\u53d7\u63a7";
+                item.SubItems[2].Font = item.Font;
+                return;
+            }
 
             if (repo.IsDirty)
                 item.SubItems[1].ForeColor = dark ? ThemeManager.AccentGreen : Color.ForestGreen;
@@ -1676,6 +1739,8 @@ namespace GitBranchSwitcher {
                         return;
 
                     var repo = (GitRepo)item.Tag;
+                    if (repo.IsIgnored)
+                        return;
                     var changes = GitHelper.GetFileChanges(repo.Path);
                     repo.IsDirty = (changes.Count > 0);
                     var syncResult = GitHelper.GetSyncCounts(repo.Path);
@@ -1714,6 +1779,13 @@ namespace GitBranchSwitcher {
             grpDetails.Enabled = true;
             var item = lvRepos.SelectedItems[0];
             var repo = (GitRepo)item.Tag;
+            if (repo.IsIgnored) {
+                grpDetails.Enabled = false;
+                lblRepoInfo.Text = $"\u5df2\u5ffd\u7565\uff1a{repo.Name}";
+                lvFileChanges.Items.Clear();
+                rtbDiff.Clear();
+                return;
+            }
             lblRepoInfo.Text = $"📂 {repo.Name}  ·  🌿 {repo.CurrentBranch}  ·  加载中...";
             await Task.Run(() => {
                 var changes = GitHelper.GetFileChanges(repo.Path);
@@ -1901,6 +1973,110 @@ namespace GitBranchSwitcher {
             }
         }
 
+        private static string NormalizeRepoPath(string path) {
+            try {
+                return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            } catch {
+                return (path ?? "").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+        }
+
+        private bool IsRepoIgnored(string path) {
+            if (_settings.IgnoredRepoPaths == null || _settings.IgnoredRepoPaths.Count == 0)
+                return false;
+
+            string normalized = NormalizeRepoPath(path);
+            return _settings.IgnoredRepoPaths.Any(x =>
+                string.Equals(NormalizeRepoPath(x), normalized, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private async Task RemoveSelectedReposFromControlAsync() {
+            var selectedItems = lvRepos.SelectedItems
+                .Cast<ListViewItem>()
+                .Where(i => i.Tag is GitRepo repo && !repo.IsIgnored)
+                .ToList();
+
+            if (selectedItems.Count == 0)
+                return;
+
+            var repos = selectedItems.Select(i => (GitRepo)i.Tag!).ToList();
+            string confirmText = selectedItems.Count == 1
+                ? "\u786e\u5b9a\u5c06\u8fd9\u4e2a\u4ed3\u5e93\u8bbe\u4e3a\u4e0d\u53d7\u63a7\u5417\uff1f\n\n\u4e0d\u4f1a\u5220\u9664\u672c\u5730\u6587\u4ef6\uff0c\u5217\u8868\u91cc\u4f1a\u7f6e\u7070\u663e\u793a\uff0c\u53f3\u952e\u53ef\u4ee5\u8fd8\u539f\u3002"
+                : $"\u786e\u5b9a\u5c06\u9009\u4e2d\u7684 {selectedItems.Count} \u4e2a\u4ed3\u5e93\u8bbe\u4e3a\u4e0d\u53d7\u63a7\u5417\uff1f\n\n\u4e0d\u4f1a\u5220\u9664\u672c\u5730\u6587\u4ef6\uff0c\u5217\u8868\u91cc\u4f1a\u7f6e\u7070\u663e\u793a\uff0c\u53f3\u952e\u53ef\u4ee5\u8fd8\u539f\u3002";
+            if (MessageBox.Show(confirmText, "\u79fb\u9664\u4ed3\u5e93", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            _settings.IgnoredRepoPaths ??= new List<string>();
+            var removedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var repo in repos) {
+                string normalized = NormalizeRepoPath(repo.Path);
+                removedPaths.Add(normalized);
+                if (!_settings.IgnoredRepoPaths.Any(x => string.Equals(NormalizeRepoPath(x), normalized, StringComparison.OrdinalIgnoreCase)))
+                    _settings.IgnoredRepoPaths.Add(normalized);
+            }
+
+            _settings.Save();
+
+            lvRepos.BeginUpdate();
+            _suppressRepoItemCheck = true;
+            foreach (var item in selectedItems) {
+                if (item.Tag is not GitRepo repo)
+                    continue;
+                repo.IsIgnored = true;
+                repo.IsSwitchQueued = false;
+                repo.IsSwitching = false;
+                repo.IsFetching = false;
+                repo.SwitchSeverity = RepoSwitchSeverity.None;
+                repo.LiveStatus = "";
+                item.Checked = false;
+                RenderRepoItem(item);
+            }
+            _suppressRepoItemCheck = false;
+            lvRepos.EndUpdate();
+
+            await RefreshBranchesAsync();
+            await BatchSyncStatusUpdate();
+            Log($"> Ignored {removedPaths.Count} repo(s) in control list.");
+        }
+
+        private async Task RestoreSelectedReposToControlAsync() {
+            var selectedItems = lvRepos.SelectedItems
+                .Cast<ListViewItem>()
+                .Where(i => i.Tag is GitRepo repo && repo.IsIgnored)
+                .ToList();
+
+            if (selectedItems.Count == 0)
+                return;
+
+            _settings.IgnoredRepoPaths ??= new List<string>();
+            var restoredPaths = new HashSet<string>(selectedItems
+                .Select(i => NormalizeRepoPath(((GitRepo)i.Tag!).Path)), StringComparer.OrdinalIgnoreCase);
+            _settings.IgnoredRepoPaths.RemoveAll(path => restoredPaths.Contains(NormalizeRepoPath(path)));
+            _settings.Save();
+
+            lvRepos.BeginUpdate();
+            _suppressRepoItemCheck = true;
+            foreach (var item in selectedItems) {
+                var repo = (GitRepo)item.Tag!;
+                repo.IsIgnored = false;
+                item.Checked = true;
+                item.Text = "\u7b49\u5f85";
+                RenderRepoItem(item);
+            }
+            _suppressRepoItemCheck = false;
+            lvRepos.EndUpdate();
+
+            await RefreshBranchesAsync();
+            await BatchSyncStatusUpdate();
+            Log($"> Restored {restoredPaths.Count} repo(s) to control list.");
+        }
+
+        private async Task<List<GitRepo>> FindReposWithoutOriginAsync(List<GitRepo> repos) {
+            return await Task.Run(() => repos
+                .Where(repo => !GitHelper.HasOriginRemote(repo.Path))
+                .ToList());
+        }
+
         private async Task LoadReposForCheckedParentsAsync(
             bool forceRescan = false,
             bool includeRepoDetails = true,
@@ -1952,12 +2128,12 @@ namespace GitBranchSwitcher {
                 if (allFound) {
                     lvRepos.BeginUpdate();
                     foreach (var (name, path, parentName) in finalRepos) {
-                        var r = new GitRepo(name, path);
+                        var r = new GitRepo(name, path) { IsIgnored = IsRepoIgnored(path) };
                         string display = name == "Root"? $"[{parentName}] (根)" : $"[{parentName}] {name}";
                         lvRepos.Items.Add(new ListViewItem(new[] {
                             "⏳", "—", "", display, path
                         }) {
-                            Tag = r, Checked = true
+                            Tag = r, Checked = !r.IsIgnored
                         });
                     }
 
@@ -2008,12 +2184,12 @@ namespace GitBranchSwitcher {
             lvRepos.BeginUpdate();
             foreach (var kvp in foundRepos)
                 foreach (var item in kvp.Value) {
-                    var r = new GitRepo(item.Name, item.FullPath);
+                    var r = new GitRepo(item.Name, item.FullPath) { IsIgnored = IsRepoIgnored(item.FullPath) };
                     string display = item.Name == "Root"? $"[{Path.GetFileName(kvp.Key)}] (根)" : $"[{Path.GetFileName(kvp.Key)}] {item.Name}";
                     lvRepos.Items.Add(new ListViewItem(new[] {
                         "⏳", "—", "", display, item.FullPath
                     }) {
-                        Tag = r, Checked = true
+                        Tag = r, Checked = !r.IsIgnored
                     });
                 }
 
@@ -2058,7 +2234,7 @@ namespace GitBranchSwitcher {
                 var allPaths = new List<string>();
                 var rootPaths = new List<string>();
                 foreach (ListViewItem item in lvRepos.Items) {
-                    if (item.Tag is GitRepo r) {
+                    if (item.Tag is GitRepo r && !r.IsIgnored) {
                         allPaths.Add(r.Path);
                         if (r.Name == "Root")
                             rootPaths.Add(r.Path);
@@ -2096,12 +2272,12 @@ namespace GitBranchSwitcher {
                 return;
             // 汇总所有勾选仓库的分支；若无勾选则取全部仓库
             var targetPaths = lvRepos.Items.Cast<ListViewItem>()
-                .Where(i => i.Checked && i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                .Where(i => i.Checked && i.Tag is GitRepo r && !r.IsIgnored && !string.IsNullOrEmpty(r.Path))
                 .Select(i => ((GitRepo)i.Tag).Path)
                 .ToList();
             if (targetPaths.Count == 0)
                 targetPaths = lvRepos.Items.Cast<ListViewItem>()
-                    .Where(i => i.Tag is GitRepo r && !string.IsNullOrEmpty(r.Path))
+                    .Where(i => i.Tag is GitRepo r && !r.IsIgnored && !string.IsNullOrEmpty(r.Path))
                     .Select(i => ((GitRepo)i.Tag).Path)
                     .ToList();
 
@@ -2835,16 +3011,47 @@ namespace GitBranchSwitcher {
 
             GitHelper.ResetCancelFlag();
 
+            var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked && i.Tag is GitRepo repo && !repo.IsIgnored).ToList();
+            if (!items.Any())
+                return;
+            _switchPostProcessCts?.Cancel();
+            var targetRepos = items
+                .Select(i => i.Tag as GitRepo)
+                .Where(r => r != null)
+                .Cast<GitRepo>()
+                .ToList();
+            var reposWithoutOrigin = await FindReposWithoutOriginAsync(targetRepos);
+            if (reposWithoutOrigin.Count > 0) {
+                string detail = string.Join("\n", reposWithoutOrigin
+                    .Take(12)
+                    .Select(r => $"- {r.Name}: {r.Path}"));
+                if (reposWithoutOrigin.Count > 12)
+                    detail += $"\n... +{reposWithoutOrigin.Count - 12}";
+
+                foreach (var item in items.Where(i => i.Tag is GitRepo r && reposWithoutOrigin.Contains(r))) {
+                    var repo = (GitRepo)item.Tag!;
+                    repo.SwitchOk = false;
+                    repo.LastMessage = "No origin remote configured.";
+                    repo.SwitchSeverity = RepoSwitchSeverity.Error;
+                    repo.SwitchStatusText = "no remote";
+                    item.Text = "\u65e0\u8fdc\u7a0b";
+                    RenderRepoItem(item);
+                }
+
+                statusLabel.Text = $"\u5207\u7ebf\u5df2\u505c\u6b62\uff1a{reposWithoutOrigin.Count} \u4e2a\u4ed3\u5e93\u6ca1\u6709 origin \u8fdc\u7a0b";
+                Log($"> Switch stopped: {reposWithoutOrigin.Count} repo(s) have no origin remote.");
+                MessageBox.Show(
+                    $"\u5207\u7ebf\u5df2\u505c\u6b62\u3002\u4ee5\u4e0b\u4ed3\u5e93\u6ca1\u6709 origin \u8fdc\u7a0b\uff1a\n\n{detail}",
+                    "\u7f3a\u5c11\u8fdc\u7a0b",
+                    MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+                return;
+            }
+
             if (_settings.ConfirmOnSwitch) {
                 if (!ShowSwitchConfirmDialog(target))
                     return;
             }
-
-            var items = lvRepos.Items.Cast<ListViewItem>().Where(i => i.Checked).ToList();
-            if (!items.Any())
-                return;
-            _switchPostProcessCts?.Cancel();
-            var targetRepos = items.Select(i => (GitRepo)i.Tag).ToList();
             foreach (var item in items) {
                 var repo = (GitRepo)item.Tag;
                 repo.IsSwitchQueued = true;

@@ -25,6 +25,7 @@ namespace GitBranchSwitcher {
         public bool HasUpstream { get; set; } = true;
         public bool IsSyncChecked { get; set; } = false;
         public bool IsDirty { get; set; } = false;
+        public bool IsIgnored { get; set; } = false;
 
         public GitRepo(string name, string path) {
             Name = name;

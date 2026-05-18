@@ -119,6 +119,11 @@ namespace GitBranchSwitcher {
             return set;
         }
 
+        public static bool HasOriginRemote(string repoPath) {
+            var (code, stdout, _) = RunGit(repoPath, "remote get-url origin", 5000);
+            return code == 0 && !string.IsNullOrWhiteSpace(stdout);
+        }
+
         public static void FetchFast(string repoPath, Action<string>? logger = null) {
             logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] git fetch origin --prune --no-tags");
             var (code, stdout, stderr) = RunGit(repoPath, "fetch origin --prune --no-tags", 15000);
@@ -537,6 +542,9 @@ namespace GitBranchSwitcher {
 
             (int code, string stdout, string stderr) RunSwitchGit(string args, int timeoutMs, Func<bool>? verify = null) =>
                 RunGitWithLockRecovery(repoPath, args, timeoutMs, confirmLockRecovery, Step, verify);
+
+            if (!HasOriginRemote(repoPath))
+                return Fail("No origin remote configured.", "no remote");
 
             // 验证当前分支是否已是目标分支
             bool IsOnBranch() {

@@ -55,6 +55,7 @@ namespace GitBranchSwitcher {
 
         public List<string> ParentPaths { get; set; } = new List<string>();
         public List<ParentRepoCache> RepositoryCache { get; set; } = new List<ParentRepoCache>();
+        public List<string> IgnoredRepoPaths { get; set; } = new List<string>();
         public List<string> CachedBranchList { get; set; } = new List<string>();
         
         public List<FavoriteItem> FavoriteBranches { get; set; } = new List<FavoriteItem>();
@@ -113,6 +114,8 @@ namespace GitBranchSwitcher {
                 s.CachedBranchList = new List<string>();
             if (s.ParentPaths == null)
                 s.ParentPaths = new List<string>();
+            if (s.IgnoredRepoPaths == null)
+                s.IgnoredRepoPaths = new List<string>();
             if (s.SlimHistory == null)
                 s.SlimHistory = new Dictionary<string, SlimRecord>();
             if (s.SlimLog == null)
