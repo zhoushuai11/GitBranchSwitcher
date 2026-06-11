@@ -33,6 +33,9 @@ namespace GitBranchSwitcher {
     }
 
     public class AppSettings {
+        public const int MinGcWindowMemoryMB = 64;
+        public const int MaxGcWindowMemoryMB = 4096;
+
         public bool StashOnSwitch { get; set; } = true;
         public bool ReapplyStashOnSwitch { get; set; } = true;
         public bool FastMode { get; set; } = false;
@@ -100,6 +103,12 @@ namespace GitBranchSwitcher {
                 s.MaxParallel = 16;
             if (s.GitOperationTimeoutSeconds <= 0)
                 s.GitOperationTimeoutSeconds = 300;
+            s.GcThreads = Math.Clamp(s.GcThreads, 1, 64);
+            s.GcWindowMemoryMB = Math.Clamp(
+                s.GcWindowMemoryMB,
+                MinGcWindowMemoryMB,
+                MaxGcWindowMemoryMB);
+            s.GcTimeoutHours = Math.Clamp(s.GcTimeoutHours, 0, 72);
 
             // [核心修改] 强制使用新路径，忽略缓存文件中的旧路径
             // 无论之前 settings.json 里存了什么旧的 \\SS-ZHOUSHUAI 路径，这里都会被覆盖

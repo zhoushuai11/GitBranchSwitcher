@@ -9,8 +9,8 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.4.3</AssemblyVersion>
-        <FileVersion>1.4.3</FileVersion>
+        <AssemblyVersion>1.4.4</AssemblyVersion>
+        <FileVersion>1.4.4</FileVersion>
 
         <IsBetaMode>false</IsBetaMode>
 
@@ -22,9 +22,7 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 优化瘦身功能。
-            2. 增加忽略子仓库功能。
-            3. 切线前检测远端仓库。
+            1. 增加修复功能。
         </ReleaseNote>
 
         <DeployRootPath>\\s4.biubiubiu.io\share</DeployRootPath>

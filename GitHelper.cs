@@ -2,10 +2,14 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace GitBranchSwitcher {
     public class SwitchAndPullResult {
@@ -13,6 +17,16 @@ namespace GitBranchSwitcher {
         public bool warning { get; set; }
         public string message { get; set; } = "";
         public string statusText { get; set; } = "";
+    }
+
+    public class RepoObjectRepairResult {
+        public bool ok { get; set; }
+        public bool cancelled { get; set; }
+        public int scannedCount { get; set; }
+        public int corruptCount { get; set; }
+        public int repairedCount { get; set; }
+        public string backupPath { get; set; } = "";
+        public string message { get; set; } = "";
     }
 
     public static class GitHelper {
@@ -126,7 +140,7 @@ namespace GitBranchSwitcher {
 
         public static void FetchFast(string repoPath, Action<string>? logger = null) {
             logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] git fetch origin --prune --no-tags");
-            var (code, stdout, stderr) = RunGit(repoPath, "fetch origin --prune --no-tags", 15000);
+            var (code, stdout, stderr) = RunGit(repoPath, "-c gc.auto=0 fetch origin --prune --no-tags", 15000);
             string output = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : !string.IsNullOrWhiteSpace(stdout) ? stdout.Trim() : "OK";
             logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] {(code == 0 ? "✓" : "✗")} {output}");
         }
@@ -143,11 +157,15 @@ namespace GitBranchSwitcher {
                 return;
             }
 
-            // 3. 针对性 Fetch：git fetch origin <branch_name>
+            // 3. 针对性 Fetch，并明确更新对应的远端跟踪分支
             // --no-tags: 不拉取 tag
             // --prune: 清理已删除的分支引用
             logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] git fetch origin \"{branch}\" --prune --no-tags");
-            var (code, stdout, stderr) = RunGit(repoPath, $"fetch origin \"{branch}\" --prune --no-tags", 15000);
+            string refspec = $"+refs/heads/{branch}:refs/remotes/origin/{branch}";
+            var (code, stdout, stderr) = RunGit(
+                repoPath,
+                $"-c gc.auto=0 fetch origin \"{refspec}\" --prune --no-tags",
+                15000);
             string output = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim() : !string.IsNullOrWhiteSpace(stdout) ? stdout.Trim() : "OK";
             logger?.Invoke($"[{System.IO.Path.GetFileName(repoPath)}] {(code == 0 ? "✓" : "✗")} {output}");
         }
@@ -426,10 +444,12 @@ namespace GitBranchSwitcher {
                 Step("> [极速模式] 跳过 Fetch");
             else {
                 Step($"> 尝试极速拉取: origin {targetBranch}...");
-                var fetchRes = RunSwitchGit($"fetch origin {targetBranch} --no-tags --prune --no-progress", ResolveTimeout());
+                string refspec = $"+refs/heads/{targetBranch}:refs/remotes/origin/{targetBranch}";
+                var fetchRes = RunSwitchGit($"-c gc.auto=0 fetch origin \"{refspec}\" --no-tags --prune --no-progress", ResolveTimeout());
                 if (fetchRes.code != 0) {
-                    Step($"⚠️ 极速拉取失败，尝试全量拉取...");
-                    RunSwitchGit($"fetch --all --tags --prune --no-progress", ResolveTimeout());
+                    string err = string.IsNullOrWhiteSpace(fetchRes.stderr) ? fetchRes.stdout : fetchRes.stderr;
+                    AddLog($"❌ 极速拉取失败: {err.Trim()}");
+                    return (false, log.ToString());
                 }
             }
 
@@ -463,7 +483,9 @@ namespace GitBranchSwitcher {
                 }
             } else {
                 if (fastMode)
-                    RunSwitchGit($"fetch origin {targetBranch} --no-tags", ResolveTimeout());
+                    RunSwitchGit(
+                        $"-c gc.auto=0 fetch origin \"+refs/heads/{targetBranch}:refs/remotes/origin/{targetBranch}\" --no-tags",
+                        ResolveTimeout());
                 bool remoteExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", ResolveTimeout()).code == 0;
                 if (!remoteExists)
                 {
@@ -597,10 +619,11 @@ namespace GitBranchSwitcher {
                 Step("> [极速模式] 跳过 Fetch");
             else {
                 Step($"> 尝试快速拉取 origin {targetBranch}...");
-                var fetchRes = RunSwitchGit($"fetch origin {targetBranch} --no-tags --prune --no-progress", ResolveTimeout());
+                string refspec = $"+refs/heads/{targetBranch}:refs/remotes/origin/{targetBranch}";
+                var fetchRes = RunSwitchGit($"-c gc.auto=0 fetch origin \"{refspec}\" --no-tags --prune --no-progress", ResolveTimeout());
                 if (fetchRes.code != 0) {
-                    Step("⚠️ 快速拉取失败，尝试全量拉取...");
-                    RunSwitchGit("fetch --all --tags --prune --no-progress", ResolveTimeout());
+                    string err = string.IsNullOrWhiteSpace(fetchRes.stderr) ? fetchRes.stdout : fetchRes.stderr;
+                    return Fail($"❌ 快速拉取失败: {err.Trim()}", "fetch failed");
                 }
             }
 
@@ -637,7 +660,9 @@ namespace GitBranchSwitcher {
                 }
             } else {
                 if (fastMode)
-                    RunSwitchGit($"fetch origin {targetBranch} --no-tags", ResolveTimeout());
+                    RunSwitchGit(
+                        $"-c gc.auto=0 fetch origin \"+refs/heads/{targetBranch}:refs/remotes/origin/{targetBranch}\" --no-tags",
+                        ResolveTimeout());
 
                 bool remoteExists = RunSwitchGit($"show-ref --verify --quiet refs/remotes/origin/{targetBranch}", ResolveTimeout()).code == 0;
                 if (!remoteExists)
@@ -806,9 +831,287 @@ namespace GitBranchSwitcher {
             return (GetDirectorySize(packDir), GetDirectorySize(gitDir));
         }
 
+        private static string QuoteGitArgument(string value) =>
+            "\"" + value.Replace("\"", "\\\"") + "\"";
+
+        private static bool TryValidateLooseObject(string filePath, string expectedSha, out string error) {
+            error = "";
+            try {
+                using var file = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var zlib = new ZLibStream(file, CompressionMode.Decompress);
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+                var buffer = new byte[1024 * 1024];
+                var header = new List<byte>(128);
+                bool headerComplete = false;
+                long declaredSize = -1;
+                long contentSize = 0;
+
+                while (true) {
+                    int read = zlib.Read(buffer, 0, buffer.Length);
+                    if (read <= 0)
+                        break;
+
+                    hash.AppendData(buffer, 0, read);
+                    int offset = 0;
+                    if (!headerComplete) {
+                        while (offset < read) {
+                            byte value = buffer[offset++];
+                            if (value == 0) {
+                                string headerText = Encoding.ASCII.GetString(header.ToArray());
+                                var match = Regex.Match(headerText, @"^\w+ (\d+)$");
+                                if (!match.Success || !long.TryParse(match.Groups[1].Value, out declaredSize)) {
+                                    error = "对象头格式无效";
+                                    return false;
+                                }
+                                headerComplete = true;
+                                break;
+                            }
+                            header.Add(value);
+                            if (header.Count > 1024) {
+                                error = "对象头过长";
+                                return false;
+                            }
+                        }
+                    }
+
+                    if (headerComplete)
+                        contentSize += read - offset;
+                }
+
+                if (!headerComplete) {
+                    error = "对象头不完整";
+                    return false;
+                }
+
+                string actualSha = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+                if (!actualSha.Equals(expectedSha, StringComparison.OrdinalIgnoreCase)) {
+                    error = $"SHA 不匹配，实际为 {actualSha}";
+                    return false;
+                }
+                if (contentSize != declaredSize) {
+                    error = $"对象大小不匹配，声明 {declaredSize}，实际 {contentSize}";
+                    return false;
+                }
+                return true;
+            } catch (Exception ex) {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private static List<(string sha, string path, string error)> ScanCorruptLooseObjects(
+            string gitDir,
+            Action<string>? logger,
+            out int scannedCount) {
+            string objectsDir = Path.Combine(gitDir, "objects");
+            var files = new List<(string sha, string path)>();
+            if (Directory.Exists(objectsDir)) {
+                foreach (string dir in Directory.GetDirectories(objectsDir)) {
+                    string prefix = Path.GetFileName(dir);
+                    if (prefix.Length != 2 || !prefix.All(Uri.IsHexDigit))
+                        continue;
+                    foreach (string file in Directory.GetFiles(dir)) {
+                        string suffix = Path.GetFileName(file);
+                        if (suffix.Length == 38 && suffix.All(Uri.IsHexDigit))
+                            files.Add(((prefix + suffix).ToLowerInvariant(), file));
+                    }
+                }
+            }
+
+            logger?.Invoke($"发现 {files.Count} 个 loose objects，开始流式校验...");
+            var corrupt = new ConcurrentBag<(string sha, string path, string error)>();
+            int checkedCount = 0;
+            var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Min(4, Environment.ProcessorCount) };
+            try {
+                Parallel.ForEach(files, options, (item, state) => {
+                    if (_cancelRequested) {
+                        state.Stop();
+                        return;
+                    }
+
+                    if (!TryValidateLooseObject(item.path, item.sha, out string error))
+                        corrupt.Add((item.sha, item.path, error));
+
+                    int current = Interlocked.Increment(ref checkedCount);
+                    if (current % 500 == 0 || current == files.Count)
+                        logger?.Invoke($"已校验 {current}/{files.Count}，发现损坏 {corrupt.Count} 个");
+                });
+            } catch (AggregateException ex) {
+                logger?.Invoke($"扫描异常: {ex.Flatten().InnerException?.Message ?? ex.Message}");
+            }
+
+            scannedCount = checkedCount;
+            return corrupt.OrderBy(x => x.sha, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        public static RepoObjectRepairResult RepairCorruptLooseObjects(
+            string repoPath,
+            Action<string>? logger = null) {
+            void Step(string message) => logger?.Invoke(message);
+            var result = new RepoObjectRepairResult();
+
+            var gitDirResult = RunGit(repoPath, "rev-parse --absolute-git-dir", 15_000);
+            if (gitDirResult.code != 0) {
+                result.message = string.IsNullOrWhiteSpace(gitDirResult.stderr)
+                    ? "无法定位 .git 目录"
+                    : gitDirResult.stderr.Trim();
+                return result;
+            }
+
+            string gitDir = Path.GetFullPath(gitDirResult.stdout.Trim());
+            if (!Directory.Exists(gitDir)) {
+                result.message = $"找不到 .git 目录: {gitDir}";
+                return result;
+            }
+
+            Step($"仓库: {repoPath}");
+            var corrupt = ScanCorruptLooseObjects(gitDir, Step, out int scannedCount);
+            result.scannedCount = scannedCount;
+            result.corruptCount = corrupt.Count;
+            if (_cancelRequested) {
+                result.cancelled = true;
+                result.message = "用户取消";
+                return result;
+            }
+            if (corrupt.Count == 0) {
+                result.ok = true;
+                result.message = $"已校验 {scannedCount} 个 loose objects，未发现损坏。";
+                return result;
+            }
+
+            foreach (var item in corrupt)
+                Step($"损坏: {item.sha} ({item.error})");
+
+            var remoteResult = RunGit(repoPath, "remote get-url origin", 15_000);
+            if (remoteResult.code != 0 || string.IsNullOrWhiteSpace(remoteResult.stdout)) {
+                result.message = "无法读取 origin 远端地址，不能自动恢复对象。";
+                return result;
+            }
+
+            string remoteUrl = remoteResult.stdout.Trim();
+            string recoveryDir = Path.Combine(gitDir, "object-recovery-" + Guid.NewGuid().ToString("N"));
+            string backupDir = Path.Combine(gitDir, "corrupt-loose-backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            try {
+                Directory.CreateDirectory(recoveryDir);
+                Step("创建临时恢复仓库...");
+                var initResult = RunGit(recoveryDir, "init --bare .", 30_000);
+                if (initResult.code != 0) {
+                    result.message = $"创建临时恢复仓库失败: {initResult.stderr.Trim()}";
+                    return result;
+                }
+
+                var remoteAddResult = RunGit(
+                    recoveryDir,
+                    $"remote add origin {QuoteGitArgument(remoteUrl)}",
+                    15_000);
+                if (remoteAddResult.code != 0) {
+                    result.message = $"配置恢复远端失败: {remoteAddResult.stderr.Trim()}";
+                    return result;
+                }
+
+                Step($"从 origin 精确恢复 {corrupt.Count} 个对象...");
+                foreach (var chunk in corrupt.Chunk(20)) {
+                    if (_cancelRequested) {
+                        result.cancelled = true;
+                        result.message = "用户取消";
+                        return result;
+                    }
+
+                    string shaArgs = string.Join(" ", chunk.Select(x => x.sha));
+                    var fetchResult = RunGit(
+                        recoveryDir,
+                        $"-c gc.auto=0 fetch --no-tags --no-write-fetch-head origin {shaArgs}",
+                        -1);
+                    if (fetchResult.code != 0) {
+                        string error = string.IsNullOrWhiteSpace(fetchResult.stderr)
+                            ? fetchResult.stdout
+                            : fetchResult.stderr;
+                        result.message = $"按 SHA 恢复失败: {error.Trim()}";
+                        return result;
+                    }
+                }
+
+                string recoveredObjectsDir = Path.Combine(recoveryDir, "objects");
+                foreach (var item in corrupt) {
+                    string recoveredPath = Path.Combine(recoveredObjectsDir, item.sha[..2], item.sha[2..]);
+                    string recoveryError = "恢复文件不存在";
+                    if (!File.Exists(recoveredPath)
+                        || !TryValidateLooseObject(recoveredPath, item.sha, out recoveryError)) {
+                        result.message = $"恢复对象校验失败 {item.sha}: {recoveryError}";
+                        return result;
+                    }
+                }
+
+                Directory.CreateDirectory(backupDir);
+                result.backupPath = backupDir;
+                foreach (var item in corrupt) {
+                    if (_cancelRequested) {
+                        result.cancelled = true;
+                        result.message = "用户取消";
+                        return result;
+                    }
+
+                    string prefix = item.sha[..2];
+                    string suffix = item.sha[2..];
+                    string recoveredPath = Path.Combine(recoveredObjectsDir, prefix, suffix);
+                    string backupPrefixDir = Path.Combine(backupDir, prefix);
+                    string backupPath = Path.Combine(backupPrefixDir, suffix);
+                    string replacementPath = item.path + ".repair-" + Guid.NewGuid().ToString("N");
+                    Directory.CreateDirectory(backupPrefixDir);
+                    File.Copy(recoveredPath, replacementPath, true);
+
+                    try {
+                        File.SetAttributes(item.path, FileAttributes.Normal);
+                        File.Move(item.path, backupPath);
+                        File.Move(replacementPath, item.path);
+                    } catch {
+                        try {
+                            if (File.Exists(replacementPath))
+                                File.Delete(replacementPath);
+                            if (!File.Exists(item.path) && File.Exists(backupPath))
+                                File.Move(backupPath, item.path);
+                        } catch { }
+                        throw;
+                    }
+
+                    if (!TryValidateLooseObject(item.path, item.sha, out string finalError))
+                        throw new InvalidDataException($"替换后校验失败 {item.sha}: {finalError}");
+                    result.repairedCount++;
+                    Step($"已修复: {item.sha}");
+                }
+
+                result.ok = true;
+                result.backupPath = backupDir;
+                result.message = $"已扫描 {scannedCount} 个对象，修复 {result.repairedCount} 个；原文件备份在 {backupDir}";
+                return result;
+            } catch (Exception ex) {
+                result.message = $"修复失败: {ex.Message}";
+                return result;
+            } finally {
+                try {
+                    string fullRecoveryDir = Path.GetFullPath(recoveryDir);
+                    string fullGitDir = Path.GetFullPath(gitDir) + Path.DirectorySeparatorChar;
+                    if (fullRecoveryDir.StartsWith(fullGitDir, StringComparison.OrdinalIgnoreCase)
+                        && Directory.Exists(fullRecoveryDir))
+                        Directory.Delete(fullRecoveryDir, true);
+                } catch { }
+            }
+        }
+
         public static (bool ok, string log, string sizeInfo, long bytesSaved, long beforeBytes, long afterBytes) GarbageCollect(string repoPath, bool aggressive, int gcThreads = 2, int gcWindowMemoryMB = 256, int gcTimeoutHours = 3, Action<string>? logger = null) {
             var logSb = new StringBuilder();
             void Step(string s) { logSb.AppendLine(s); logger?.Invoke(s); }
+            int effectiveGcThreads = Math.Clamp(gcThreads, 1, 64);
+            int effectiveGcWindowMemoryMB = Math.Clamp(
+                gcWindowMemoryMB,
+                AppSettings.MinGcWindowMemoryMB,
+                AppSettings.MaxGcWindowMemoryMB);
+            long gcWindowMemoryBytes = Math.Min(
+                (long)effectiveGcWindowMemoryMB * 1024 * 1024,
+                uint.MaxValue);
+            string gcWindowMemoryConfig = gcWindowMemoryBytes == (long)effectiveGcWindowMemoryMB * 1024 * 1024
+                ? $"{effectiveGcWindowMemoryMB}m"
+                : gcWindowMemoryBytes.ToString(CultureInfo.InvariantCulture);
             string gitDir = Path.Combine(repoPath, ".git");
             long sizeBefore = GetDirectorySize(gitDir);
             Step($"初始大小: {FormatSize(sizeBefore)}");
@@ -820,7 +1123,7 @@ namespace GitBranchSwitcher {
 
             // 限制线程数和内存，避免拉爆 CPU/RAM
             string gcBase = aggressive ? "gc --prune=now --aggressive" : "gc --prune=now";
-            string args = $"-c pack.threads={gcThreads} -c pack.windowMemory={gcWindowMemoryMB}m {gcBase}";
+            string args = $"-c pack.threads={effectiveGcThreads} -c pack.windowMemory={gcWindowMemoryConfig} {gcBase}";
             int gcTimeoutMs = gcTimeoutHours <= 0 ? -1 : gcTimeoutHours * 60 * 60 * 1000;
 
             string packDirPath = Path.Combine(repoPath, ".git", "objects", "pack");
@@ -839,7 +1142,7 @@ namespace GitBranchSwitcher {
             }
 
             string timeoutDesc = gcTimeoutHours <= 0 ? "不限" : $"{gcTimeoutHours}h";
-            Step($"> 执行 GC (threads={gcThreads}, windowMemory={gcWindowMemoryMB}m, timeout={timeoutDesc})...");
+            Step($"> 执行 GC (threads={effectiveGcThreads}, windowMemory={effectiveGcWindowMemoryMB}MB, timeout={timeoutDesc})...");
             var (code, stdout, stderr) = RunGit(repoPath, args, gcTimeoutMs);
             // ── 自动修复损坏对象，最多循环 10 次 ─────────────────
             const int maxRepair = 10;

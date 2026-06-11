@@ -518,6 +518,8 @@ namespace GitBranchSwitcher {
 #endif
             var btnSuperSlim = MakeBtn("💃 瘦身", Color.MistyRose);
             btnSuperSlim.ForeColor = Color.DarkRed;
+            var btnObjectRepair = MakeBtn("🛠 修复", Color.LavenderBlush);
+            btnObjectRepair.ForeColor = Color.DarkMagenta;
 
             // [新增] 设置按钮
             var btnSettings = MakeBtn("⚙️ 设置", Color.WhiteSmoke);
@@ -539,6 +541,7 @@ namespace GitBranchSwitcher {
             repoToolbar.Controls.Add(btnRank);
 #endif
             repoToolbar.Controls.Add(btnSuperSlim);
+            repoToolbar.Controls.Add(btnObjectRepair);
 
             // [新增] 将设置按钮加在瘦身按钮后面
             repoToolbar.Controls.Add(btnSettings);
@@ -706,6 +709,7 @@ namespace GitBranchSwitcher {
             btnRank.Click += (_, __) => ShowLeaderboard();
 #endif
             btnSuperSlim.Click += (_, __) => ShowSlimDialog();
+            btnObjectRepair.Click += (_, __) => ShowObjectRepairDialog();
             var listMenu = new ContextMenuStrip();
             listMenu.Items.Add("📂 打开文件夹", null, (_, __) => {
                 if (lvRepos.SelectedItems.Count > 0)
@@ -3360,6 +3364,263 @@ namespace GitBranchSwitcher {
             txtLog.ScrollToCaret();
         }
 
+        private void ShowObjectRepairDialog() {
+            var repos = lvRepos.Items.Cast<ListViewItem>()
+                .Where(i => i.Tag is GitRepo repo && !repo.IsIgnored)
+                .Select(i => (item: i, repo: (GitRepo)i.Tag))
+                .ToList();
+            if (repos.Count == 0) {
+                MessageBox.Show("当前没有可修复的仓库。", "仓库修复", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var selectedPaths = lvRepos.SelectedItems.Cast<ListViewItem>()
+                .Where(i => i.Tag is GitRepo)
+                .Select(i => ((GitRepo)i.Tag).Path)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (selectedPaths.Count == 0) {
+                selectedPaths = repos.Where(x => x.item.Checked)
+                    .Select(x => x.repo.Path)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+            if (selectedPaths.Count == 0)
+                selectedPaths.Add(repos[0].repo.Path);
+
+            var dlg = new Form {
+                Text = "仓库对象修复",
+                Width = 980,
+                Height = 700,
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.SizableToolWindow,
+                MinimizeBox = false
+            };
+            bool isRunning = false;
+            bool isDone = false;
+
+            var layout = new TableLayoutPanel {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 4,
+                Padding = new Padding(12)
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 44));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 56));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+
+            var infoPanel = new Panel { Dock = DockStyle.Fill };
+            var lblTitle = new Label {
+                Left = 0,
+                Top = 0,
+                Width = 930,
+                Height = 26,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Text = "扫描并修复损坏的 Git loose objects"
+            };
+            var lblHint = new Label {
+                Left = 0,
+                Top = 30,
+                Width = 930,
+                Height = 36,
+                ForeColor = Color.DimGray,
+                Text = "只替换完整校验失败的对象；从 origin 按 SHA 精确恢复并保留原文件备份。不会执行 GC、reset、checkout、stash 或 fetch --all。"
+            };
+            infoPanel.Controls.AddRange(new Control[] { lblTitle, lblHint });
+
+            var lvRepair = new ListView {
+                Dock = DockStyle.Fill,
+                View = View.Details,
+                FullRowSelect = true,
+                GridLines = true,
+                CheckBoxes = true,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            lvRepair.Columns.Add("仓库", 150);
+            lvRepair.Columns.Add("路径", 330);
+            lvRepair.Columns.Add("状态", 110);
+            lvRepair.Columns.Add("已扫描", 80);
+            lvRepair.Columns.Add("损坏", 70);
+            lvRepair.Columns.Add("已修复", 70);
+            lvRepair.Columns.Add("说明", 180);
+            foreach (var entry in repos) {
+                var item = new ListViewItem(entry.repo.Name) {
+                    Checked = selectedPaths.Contains(entry.repo.Path),
+                    Tag = entry.repo
+                };
+                item.SubItems.Add(entry.repo.Path);
+                item.SubItems.Add("等待");
+                item.SubItems.Add("—");
+                item.SubItems.Add("—");
+                item.SubItems.Add("—");
+                item.SubItems.Add("");
+                lvRepair.Items.Add(item);
+            }
+
+            var rtbRepairLog = new RichTextBox {
+                Dock = DockStyle.Fill,
+                ReadOnly = true,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.Gainsboro,
+                Font = new Font("Consolas", 9),
+                BorderStyle = BorderStyle.None
+            };
+
+            var bottomPanel = new Panel { Dock = DockStyle.Fill };
+            var lblSummary = new Label {
+                Left = 0,
+                Top = 10,
+                Width = 570,
+                Height = 30,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Text = $"已选择 {lvRepair.CheckedItems.Count} / {lvRepair.Items.Count} 个仓库"
+            };
+            var btnSelectAll = new Button { Left = 585, Top = 8, Width = 100, Height = 34, Text = "全选/反选" };
+            var btnCloseRepair = new Button { Left = 695, Top = 8, Width = 100, Height = 34, Text = "关闭" };
+            var btnStartRepair = new Button {
+                Left = 805,
+                Top = 8,
+                Width = 130,
+                Height = 34,
+                Text = "开始修复",
+                BackColor = Color.LavenderBlush,
+                ForeColor = Color.DarkMagenta,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9, FontStyle.Bold)
+            };
+            bottomPanel.Controls.AddRange(new Control[] { lblSummary, btnSelectAll, btnCloseRepair, btnStartRepair });
+            layout.Controls.Add(infoPanel, 0, 0);
+            layout.Controls.Add(lvRepair, 0, 1);
+            layout.Controls.Add(rtbRepairLog, 0, 2);
+            layout.Controls.Add(bottomPanel, 0, 3);
+            dlg.Controls.Add(layout);
+
+            void SetSubItem(ListViewItem item, int index, string value) {
+                while (item.SubItems.Count <= index)
+                    item.SubItems.Add("");
+                item.SubItems[index].Text = value;
+            }
+            void AppendRepairLog(string message) {
+                if (dlg.IsDisposed || !dlg.IsHandleCreated)
+                    return;
+                dlg.BeginInvoke((Action)(() => {
+                    rtbRepairLog.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+                    rtbRepairLog.ScrollToCaret();
+                }));
+            }
+            void RefreshRepairSelection() {
+                lblSummary.Text = $"已选择 {lvRepair.CheckedItems.Count} / {lvRepair.Items.Count} 个仓库";
+                btnStartRepair.Enabled = !isRunning && lvRepair.CheckedItems.Count > 0;
+            }
+
+            async Task RunRepairAsync() {
+                var selected = lvRepair.CheckedItems.Cast<ListViewItem>()
+                    .Where(i => i.Tag is GitRepo)
+                    .ToList();
+                if (selected.Count == 0)
+                    return;
+                if (MessageBox.Show(
+                        "修复期间请不要在 Fork、命令行或其他工具中对这些仓库执行 Fetch、GC、Repack。\n\n确认开始扫描和修复吗？",
+                        "确认仓库修复",
+                        MessageBoxButtons.OKCancel,
+                        MessageBoxIcon.Warning) != DialogResult.OK)
+                    return;
+
+                isRunning = true;
+                isDone = false;
+                GitHelper.ResetCancelFlag();
+                btnStartRepair.Enabled = false;
+                btnSelectAll.Enabled = false;
+                btnCloseRepair.Text = "取消";
+                statusLabel.Text = $"正在修复 {selected.Count} 个仓库...";
+                statusProgress.Visible = true;
+                int successCount = 0;
+                int failedCount = 0;
+                int repairedCount = 0;
+                var batchWatch = Stopwatch.StartNew();
+
+                foreach (var item in selected) {
+                    if (GitHelper.IsCancelRequested)
+                        break;
+
+                    var repo = (GitRepo)item.Tag;
+                    SetSubItem(item, 2, "扫描中");
+                    SetSubItem(item, 6, "");
+                    item.ForeColor = Color.DarkOrange;
+                    item.EnsureVisible();
+                    AppendRepairLog("");
+                    AppendRepairLog($"=== {repo.Name} ===");
+
+                    var result = await Task.Run(() =>
+                        GitHelper.RepairCorruptLooseObjects(repo.Path, message => AppendRepairLog($"[{repo.Name}] {message}")));
+                    SetSubItem(item, 3, result.scannedCount.ToString());
+                    SetSubItem(item, 4, result.corruptCount.ToString());
+                    SetSubItem(item, 5, result.repairedCount.ToString());
+                    SetSubItem(item, 6, result.message);
+                    repairedCount += result.repairedCount;
+
+                    if (result.cancelled) {
+                        SetSubItem(item, 2, "已取消");
+                        item.ForeColor = Color.DimGray;
+                        break;
+                    }
+                    if (result.ok) {
+                        successCount++;
+                        SetSubItem(item, 2, result.repairedCount > 0 ? "已修复" : "正常");
+                        item.ForeColor = Color.DarkGreen;
+                    } else {
+                        failedCount++;
+                        SetSubItem(item, 2, "失败");
+                        item.ForeColor = Color.DarkRed;
+                    }
+                    lblSummary.Text = $"成功 {successCount}，失败 {failedCount}，共修复 {repairedCount} 个对象";
+                }
+
+                batchWatch.Stop();
+                bool cancelled = GitHelper.IsCancelRequested;
+                GitHelper.ResetCancelFlag();
+                isRunning = false;
+                isDone = true;
+                btnSelectAll.Enabled = true;
+                btnCloseRepair.Text = "关闭";
+                btnStartRepair.Text = "再次扫描";
+                btnStartRepair.Enabled = lvRepair.CheckedItems.Count > 0;
+                lblSummary.Text = $"{(cancelled ? "已取消" : "完成")}：成功 {successCount}，失败 {failedCount}，修复 {repairedCount} 个对象，耗时 {batchWatch.Elapsed:hh\\:mm\\:ss}";
+                statusProgress.Visible = false;
+                statusLabel.Text = cancelled ? "仓库修复已取消" : $"仓库修复完成，共修复 {repairedCount} 个对象";
+            }
+
+            lvRepair.ItemChecked += (_, __) => {
+                if (dlg.IsHandleCreated)
+                    dlg.BeginInvoke((Action)RefreshRepairSelection);
+            };
+            btnSelectAll.Click += (_, __) => {
+                bool check = lvRepair.Items.Cast<ListViewItem>().Any(i => !i.Checked);
+                foreach (ListViewItem item in lvRepair.Items)
+                    item.Checked = check;
+                RefreshRepairSelection();
+            };
+            btnStartRepair.Click += async (_, __) => await RunRepairAsync();
+            btnCloseRepair.Click += (_, __) => {
+                if (!isRunning) {
+                    dlg.Close();
+                    return;
+                }
+                GitHelper.CancelAllRunningGitOps();
+                btnCloseRepair.Enabled = false;
+                btnCloseRepair.Text = "取消中...";
+                AppendRepairLog("正在取消当前扫描或 Git 恢复操作...");
+            };
+            dlg.FormClosing += (_, e) => {
+                if (isRunning && !isDone)
+                    e.Cancel = true;
+            };
+
+            RefreshRepairSelection();
+            if (_settings.DarkMode)
+                ThemeManager.Apply(dlg);
+            dlg.ShowDialog(this);
+        }
+
         private async void ShowSlimDialog() {
             var allRows = lvRepos.Items.Cast<ListViewItem>()
                 .Select(i => (Repo: (GitRepo)i.Tag, Checked: true))
@@ -3425,7 +3686,11 @@ namespace GitBranchSwitcher {
                 return new NumericUpDown { Minimum = min, Maximum = max, Value = Math.Clamp(val, min, max), Width = width, Margin = new Padding(0, 5, 12, 0) };
             }
             var nudThreads = MakeNud(_settings.GcThreads, 1, 64, 56);
-            var nudMemory = MakeNud(_settings.GcWindowMemoryMB, 64, 8192, 72);
+            var nudMemory = MakeNud(
+                _settings.GcWindowMemoryMB,
+                AppSettings.MinGcWindowMemoryMB,
+                AppSettings.MaxGcWindowMemoryMB,
+                72);
             var nudTimeout = MakeNud(_settings.GcTimeoutHours <= 0 ? 0 : _settings.GcTimeoutHours, 0, 72, 56);
             var chkDeleteBranches = new CheckBox { Text = "删除所有非当前本地分支（高风险）", AutoSize = true, Margin = new Padding(0, 7, 14, 0) };
             var btnCleanTmp = new Button { Text = "清理 tmp_pack_*", Width = 120, Height = 28, Margin = new Padding(0, 4, 0, 0), FlatStyle = FlatStyle.Flat };
