@@ -475,7 +475,7 @@ namespace GitBranchSwitcher {
                 for (int i = 0; i < lbParents.Items.Count; i++)
                     lbParents.SetItemChecked(i, targetState);
                 _suppressParentItemCheck = false;
-                QueueLoadReposForCheckedParents(forceRescan: !targetState, includeRepoDetails: false, refreshBranchCatalog: targetState, autoFetchAfterLoad: false, debounceMs: 0);
+                QueueLoadReposForCheckedParents(forceRescan: !targetState, includeRepoDetails: false, refreshBranchCatalog: targetState, autoFetchAfterLoad: targetState, debounceMs: 0);
             };
             lbParents.ItemCheck += (_, e) => { if (_suppressParentItemCheck) return;
                 // [修改] 从对象中获取 Path，而不是直接 ToString
@@ -485,11 +485,12 @@ namespace GitBranchSwitcher {
 
                 BeginInvoke(new Action(async () => {
                     // 注意：ItemCheck 事件触发时状态还没变，要用 GetItemChecked
-                    if (lbParents.GetItemChecked(e.Index))
+                    bool isChecked = lbParents.GetItemChecked(e.Index);
+                    if (isChecked)
                         _checkedParents.Add(p);
                     else
                         _checkedParents.Remove(p);
-                    await LoadReposForCheckedParentsAsync(false, includeRepoDetails: true, refreshBranchCatalog: true, autoFetchAfterLoad: false);
+                    await LoadReposForCheckedParentsAsync(false, includeRepoDetails: true, refreshBranchCatalog: true, autoFetchAfterLoad: isChecked);
                 }));
             };
             splitUpper.Panel1.Controls.Add(grpTop);
@@ -655,6 +656,7 @@ namespace GitBranchSwitcher {
                                 // [修改] 调用新方法，只 Fetch 当前分支
                                 GitHelper.FetchCurrentBranch(repo.Path, fetchLogger);
                                 repo.IsFetching = false;
+                                BeginInvoke((Action)(() => RenderRepoItem(item)));
                             }
                         });
                     });
@@ -691,6 +693,7 @@ namespace GitBranchSwitcher {
                                 BeginInvoke((Action)(() => RenderRepoItem(item)));
                                 GitHelper.FetchCurrentBranch(repo.Path, fetchLogger);
                                 repo.IsFetching = false;
+                                BeginInvoke((Action)(() => RenderRepoItem(item)));
                             }
                         });
                     });
@@ -1608,6 +1611,8 @@ namespace GitBranchSwitcher {
                 subItem.ForeColor = defaultTextColor;
             item.SubItems[0].ForeColor = defaultTextColor;
             item.SubItems[0].Font = item.Font;
+            if (!repo.IsFetching && item.Text == "Fetch中")
+                item.Text = "就绪";
 
             if (repo.IsIgnored) {
                 Color ignoredBack = dark ? Color.FromArgb(0x2A, 0x2A, 0x2A) : Color.FromArgb(0xF1, 0xF1, 0xF1);
@@ -1637,6 +1642,9 @@ namespace GitBranchSwitcher {
 
             // ── Fetch 中 ── 青色（优先级最高）
             if (repo.IsFetching) {
+                item.Text = "Fetch中";
+                item.SubItems[0].ForeColor = dark ? Color.Cyan : Color.DarkCyan;
+                item.SubItems[0].Font = boldFont;
                 syncText = "Fetch中...";
                 syncColor = dark ? Color.Cyan : Color.DarkCyan;
                 syncFont = boldFont;
@@ -2223,51 +2231,83 @@ namespace GitBranchSwitcher {
                     foreach (ListViewItem item in lvRepos.Items)
                         RenderRepoItem(item);
                     lvRepos.EndUpdate();
-                    if (refreshBranchCatalog)
-                        _ = RefreshBranchesAsync(token: token);
-                    if (includeRepoDetails)
-                        _ = BatchSyncStatusUpdate(token);
-                    if (autoFetchAfterLoad)
+                    if (autoFetchAfterLoad) {
                         _ = AutoFetchAndRefreshAsync(token);
+                    } else {
+                        if (refreshBranchCatalog)
+                            _ = RefreshBranchesAsync(token: token);
+                        if (includeRepoDetails)
+                            _ = BatchSyncStatusUpdate(token);
+                    }
                 }));
             });
         }
 
         private async Task AutoFetchAndRefreshAsync(CancellationToken token) {
+            var targetItems = lvRepos.Items.Cast<ListViewItem>()
+                .Where(item => item.Tag is GitRepo repo && !repo.IsIgnored)
+                .ToList();
+            int completedCount = 0;
             try {
-                var allPaths = new List<string>();
-                var rootPaths = new List<string>();
-                foreach (ListViewItem item in lvRepos.Items) {
-                    if (item.Tag is GitRepo r && !r.IsIgnored) {
-                        allPaths.Add(r.Path);
-                        if (r.Name == "Root")
-                            rootPaths.Add(r.Path);
-                    }
-                }
-
-                if (allPaths.Count == 0)
+                if (targetItems.Count == 0)
                     return;
-                var targetPaths = rootPaths.Count > 0? rootPaths : allPaths;
-                lblFetchStatus.Text = rootPaths.Count > 0? $"📡 正在同步 {targetPaths.Count} 个主仓库..." : $"📡 正在同步 {targetPaths.Count} 个仓库...";
+
+                lblFetchStatus.Text = $"📡 正在 Fetch 0/{targetItems.Count} 个仓库...";
+                statusLabel.Text = $"正在自动 Fetch 0/{targetItems.Count}...";
+                statusProgress.Visible = true;
+
+                Action<string> fetchLogger = line => BeginInvoke((Action)(() => Log(line)));
                 await Task.Run(() => {
                     var opts = new ParallelOptions {
                         MaxDegreeOfParallelism = 8,
                         CancellationToken = token
                     };
-                    Parallel.ForEach(targetPaths, opts, (path) => {
+                    Parallel.ForEach(targetItems, opts, item => {
                         if (token.IsCancellationRequested)
                             return;
-                        GitHelper.FetchFast(path);
+                        var repo = (GitRepo)item.Tag;
+                        try {
+                            repo.IsFetching = true;
+                            repo.IsSyncChecked = false;
+                            BeginInvoke((Action)(() => RenderRepoItem(item)));
+                            GitHelper.FetchFast(repo.Path, fetchLogger);
+                            repo.CurrentBranch = GitHelper.GetFriendlyBranch(repo.Path);
+                            var changes = GitHelper.GetFileChanges(repo.Path);
+                            repo.IsDirty = changes.Count > 0;
+                            var syncResult = GitHelper.GetSyncCounts(repo.Path);
+                            repo.IsSyncChecked = true;
+                            if (syncResult == null) {
+                                repo.HasUpstream = false;
+                                repo.Incoming = 0;
+                                repo.Outgoing = 0;
+                            } else {
+                                repo.HasUpstream = true;
+                                repo.Incoming = syncResult.Value.behind;
+                                repo.Outgoing = syncResult.Value.ahead;
+                            }
+                        } finally {
+                            repo.IsFetching = false;
+                            int currentCompleted = Interlocked.Increment(ref completedCount);
+                            BeginInvoke((Action)(() => {
+                                RenderRepoItem(item);
+                                lblFetchStatus.Text = $"📡 正在 Fetch {currentCompleted}/{targetItems.Count} 个仓库...";
+                                statusLabel.Text = $"正在自动 Fetch {currentCompleted}/{targetItems.Count}...";
+                            }));
+                        }
                     });
                 });
                 if (token.IsCancellationRequested)
                     return;
-                BeginInvoke((Action)(() => {
-                    lblFetchStatus.Text = "";
-                    _ = RefreshBranchesAsync(token: token);
-                }));
-                await BatchSyncStatusUpdate(token);
-            } catch {
+
+                statusLabel.Text = "Fetch 完成，正在刷新分支列表...";
+                await RefreshBranchesAsync(token: token);
+            } catch (OperationCanceledException) {
+            } catch (Exception ex) {
+                Log($"[AutoFetch] {ex.Message}");
+            } finally {
+                lblFetchStatus.Text = "";
+                statusProgress.Visible = false;
+                statusLabel.Text = "就绪";
             }
         }
 
