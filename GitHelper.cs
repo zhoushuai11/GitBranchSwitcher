@@ -823,6 +823,106 @@ namespace GitBranchSwitcher {
             }
         }
 
+        public static (bool ok, string message) CloneOrAttachExisting(
+            string repoUrl,
+            string localPath,
+            string branch,
+            bool allowExistingWithoutGit,
+            Action<string>? onProgress = null) {
+            if (!Directory.Exists(localPath) || Directory.GetFileSystemEntries(localPath).Length == 0)
+                return Clone(repoUrl, localPath, branch, onProgress);
+
+            bool targetHasGit = IsGitRoot(localPath);
+            if (targetHasGit && !allowExistingWithoutGit)
+                return (false, "Target already contains a Git repository.");
+
+            if (!targetHasGit && !allowExistingWithoutGit)
+                return (false, "Target directory is not empty. Enable existing-directory rebuild to continue.");
+
+            Directory.CreateDirectory(localPath);
+
+            (bool ok, string message) Step(string title, string args, int timeoutMs) {
+                onProgress?.Invoke(title);
+                var (code, stdout, stderr) = RunGit(localPath, args, timeoutMs);
+                if (code == 0)
+                    return (true, stdout);
+
+                string output = string.IsNullOrWhiteSpace(stderr) ? stdout : stderr;
+                return (false, $"{title} failed (Code {code}): {output.Trim()}");
+            }
+
+            if (!targetHasGit) {
+                var init = Step("> git init", "init", 60_000);
+                if (!init.ok)
+                    return init;
+
+                var remote = Step(
+                    "> git remote add origin",
+                    $"remote add origin {QuoteGitArgument(repoUrl)}",
+                    30_000);
+                if (!remote.ok)
+                    return remote;
+            } else {
+                var hasOrigin = Step("> git remote get-url origin", "remote get-url origin", 30_000);
+                var remote = hasOrigin.ok
+                    ? Step(
+                        "> git remote set-url origin",
+                        $"remote set-url origin {QuoteGitArgument(repoUrl)}",
+                        30_000)
+                    : Step(
+                        "> git remote add origin",
+                        $"remote add origin {QuoteGitArgument(repoUrl)}",
+                        30_000);
+                if (!remote.ok)
+                    return remote;
+            }
+
+            string refspec = $"+refs/heads/{branch}:refs/remotes/origin/{branch}";
+            var fetch = Step(
+                $"> git fetch origin {branch}",
+                $"fetch origin {QuoteGitArgument(refspec)} --no-tags --prune --progress",
+                -1);
+            if (!fetch.ok)
+                return fetch;
+
+            var updateRef = Step(
+                $"> git update-ref refs/heads/{branch}",
+                $"update-ref {QuoteGitArgument($"refs/heads/{branch}")} {QuoteGitArgument($"refs/remotes/origin/{branch}")}",
+                60_000);
+            if (!updateRef.ok)
+                return updateRef;
+
+            var setHead = Step(
+                $"> git symbolic-ref HEAD refs/heads/{branch}",
+                $"symbolic-ref HEAD {QuoteGitArgument($"refs/heads/{branch}")}",
+                30_000);
+            if (!setHead.ok)
+                return setHead;
+
+            var resetIndex = Step(
+                $"> git reset --mixed origin/{branch}",
+                $"reset --mixed {QuoteGitArgument($"origin/{branch}")}",
+                -1);
+            if (!resetIndex.ok)
+                return resetIndex;
+
+            var reset = Step(
+                $"> git reset --hard origin/{branch}",
+                $"reset --hard {QuoteGitArgument($"origin/{branch}")}",
+                -1);
+            if (!reset.ok)
+                return reset;
+
+            var upstream = Step(
+                $"> git branch --set-upstream-to origin/{branch}",
+                $"branch --set-upstream-to={QuoteGitArgument($"origin/{branch}")} {QuoteGitArgument(branch)}",
+                30_000);
+            if (!upstream.ok)
+                onProgress?.Invoke(upstream.message);
+
+            return (true, "Repository remote reset successfully.");
+        }
+
         // ==================== 3. 维护与修复 ====================
 
         public static (long packBytes, long gitBytes) GetRepoSizeInfo(string repoPath) {

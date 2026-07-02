@@ -9,8 +9,8 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <AssemblyVersion>1.4.5</AssemblyVersion>
-        <FileVersion>1.4.5</FileVersion>
+        <AssemblyVersion>1.4.7</AssemblyVersion>
+        <FileVersion>1.4.7</FileVersion>
 
         <IsBetaMode>false</IsBetaMode>
 
@@ -22,7 +22,7 @@
         <DefineConstants Condition="'$(IsBetaMode)'=='true'">$(DefineConstants);BETA_MODE</DefineConstants>
 
         <ReleaseNote>
-            1. 修复点击仓库自动拉取失效的问题。
+            1. 修正自动推荐目标分支功能。
         </ReleaseNote>
 
         <DeployRootPath>\\s4.biubiubiu.io\share</DeployRootPath>

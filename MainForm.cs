@@ -440,6 +440,7 @@ namespace GitBranchSwitcher {
                     }
 
                     SeedParentsToUi();
+                    SelectParentInList(path);
                     QueueLoadReposForCheckedParents(forceRescan: true);
                 }
             };
@@ -475,6 +476,7 @@ namespace GitBranchSwitcher {
                 for (int i = 0; i < lbParents.Items.Count; i++)
                     lbParents.SetItemChecked(i, targetState);
                 _suppressParentItemCheck = false;
+                SyncTargetBranchFromCheckedParents();
                 QueueLoadReposForCheckedParents(forceRescan: !targetState, includeRepoDetails: false, refreshBranchCatalog: targetState, autoFetchAfterLoad: targetState, debounceMs: 0);
             };
             lbParents.ItemCheck += (_, e) => { if (_suppressParentItemCheck) return;
@@ -490,6 +492,7 @@ namespace GitBranchSwitcher {
                         _checkedParents.Add(p);
                     else
                         _checkedParents.Remove(p);
+                    SyncTargetBranchFromCheckedParents(isChecked ? item : null);
                     await LoadReposForCheckedParentsAsync(false, includeRepoDetails: true, refreshBranchCatalog: true, autoFetchAfterLoad: isChecked);
                 }));
             };
@@ -511,7 +514,7 @@ namespace GitBranchSwitcher {
             btnRepoFetch.ForeColor = Color.DarkSlateGray;
             var btnFetchAll = MakeBtn("⬇⬇ Fetch All", Color.Honeydew);
             btnFetchAll.ForeColor = Color.DarkGreen;
-            var btnNewClone = MakeBtn("➕ 新建拉线", Color.Azure);
+            var btnNewClone = MakeBtn("➕ 拉仓", Color.Azure);
             btnNewClone.ForeColor = Color.DarkBlue;
 #if !BOSS_MODE && !PURE_MODE
             var btnRank = MakeBtn("🏆 排行榜", Color.Ivory);
@@ -612,22 +615,22 @@ namespace GitBranchSwitcher {
             };
             btnRescan.Click += async (_, __) => await LoadReposForCheckedParentsAsync(true, includeRepoDetails: true, refreshBranchCatalog: true, autoFetchAfterLoad: true);
             btnNewClone.Click += (_, __) => {
-                var form = new CloneForm();
-                if (form.ShowDialog(this) == DialogResult.OK && form.CreatedWorkspaces.Count > 0) {
-                    bool c = false;
-                    foreach (var p in form.CreatedWorkspaces) {
-                        if (!_settings.ParentPaths.Contains(p)) {
-                            _settings.ParentPaths.Add(p);
-                            _checkedParents.Add(p);
-                            c = true;
-                        }
+                string defaultBranch = cmbTargetBranch.Text?.Trim() ?? "";
+                string defaultParent = ResolveDefaultCloneParent();
+                string currentRepoBranch = ResolveSelectedRepoBranch();
+                var form = new SingleCloneForm(_settings.ParentPaths, defaultBranch, defaultParent, currentRepoBranch);
+                if (form.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(form.SelectedParentPath)) {
+                    bool parentAdded = false;
+                    if (!_settings.ParentPaths.Contains(form.SelectedParentPath)) {
+                        _settings.ParentPaths.Add(form.SelectedParentPath);
+                        parentAdded = true;
                     }
 
-                    if (c) {
-                        _settings.Save();
+                    _checkedParents.Add(form.SelectedParentPath);
+                    _settings.Save();
+                    if (parentAdded)
                         SeedParentsToUi();
-                        QueueLoadReposForCheckedParents(forceRescan: true);
-                    }
+                    QueueLoadReposForCheckedParents(forceRescan: true);
                 }
             };
             btnRepoFetch.Click += async (_, __) => {
@@ -1480,8 +1483,100 @@ namespace GitBranchSwitcher {
                         lbParents.Items[i] = lbParents.Items[i]; 
                     }
                     lbParents.EndUpdate();
+                    SyncTargetBranchFromCheckedParents();
                 }));
             }
+        }
+
+        private void SelectParentInList(string path) {
+            if (lbParents == null || lbParents.IsDisposed || string.IsNullOrWhiteSpace(path))
+                return;
+
+            for (int i = 0; i < lbParents.Items.Count; i++) {
+                if (lbParents.Items[i] is ParentFolderItem item
+                    && string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase)) {
+                    lbParents.SelectedIndex = i;
+                    break;
+                }
+            }
+        }
+
+        private void SyncTargetBranchFromCheckedParents(ParentFolderItem? preferredItem = null) {
+            if (lbParents == null || lbParents.IsDisposed || cmbTargetBranch == null || cmbTargetBranch.IsDisposed)
+                return;
+
+            ParentFolderItem? targetItem = null;
+            if (preferredItem != null && IsParentChecked(preferredItem.Path))
+                targetItem = preferredItem;
+            else if (lbParents.SelectedItem is ParentFolderItem selectedItem && IsParentChecked(selectedItem.Path))
+                targetItem = selectedItem;
+            else
+                targetItem = lbParents.CheckedItems.Cast<ParentFolderItem>().LastOrDefault();
+
+            if (targetItem == null) {
+                cmbTargetBranch.Text = "";
+                return;
+            }
+
+            SetTargetBranchFromParent(targetItem);
+        }
+
+        private void SetTargetBranchFromParent(ParentFolderItem item) {
+            if (item == null || cmbTargetBranch == null || cmbTargetBranch.IsDisposed)
+                return;
+
+            if (IsUsableTargetBranch(item.Branch)) {
+                cmbTargetBranch.Text = item.Branch.Trim();
+                return;
+            }
+
+            SetTargetBranchFromParentPathAsync(item.Path);
+        }
+
+        private void SetTargetBranchFromParentPathAsync(string path) {
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+            if (!Directory.Exists(System.IO.Path.Combine(path, ".git")))
+                return;
+
+            _ = Task.Run(() => GitHelper.GetFriendlyBranch(path)).ContinueWith(t => {
+                if (t.IsFaulted || t.IsCanceled)
+                    return;
+
+                string branch = t.Result;
+                if (!IsUsableTargetBranch(branch))
+                    return;
+
+                BeginInvoke(new Action(() => {
+                    if (IsParentChecked(path) && cmbTargetBranch != null && !cmbTargetBranch.IsDisposed)
+                        cmbTargetBranch.Text = branch.Trim();
+                }));
+            });
+        }
+
+        private bool IsParentChecked(string path) {
+            if (lbParents == null || lbParents.IsDisposed || string.IsNullOrWhiteSpace(path))
+                return false;
+
+            foreach (var checkedItem in lbParents.CheckedItems) {
+                if (checkedItem is ParentFolderItem parent
+                    && string.Equals(parent.Path, path, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsUsableTargetBranch(string branch) {
+            if (string.IsNullOrWhiteSpace(branch))
+                return false;
+
+            string value = branch.Trim();
+            return value != "—"
+                   && value != "⏳"
+                   && !value.Contains("detached", StringComparison.OrdinalIgnoreCase)
+                   && !value.Contains("unknown", StringComparison.OrdinalIgnoreCase)
+                   && !value.Equals("HEAD", StringComparison.OrdinalIgnoreCase);
         }
 
         private void QueueLoadReposForCheckedParents(
@@ -1545,6 +1640,49 @@ namespace GitBranchSwitcher {
                 return "\u5b8c\u6210";
 
             return text.Length > 18 ? text[..18] + "..." : text;
+        }
+
+        private string ResolveDefaultCloneParent() {
+            if (lbParents?.SelectedItem is ParentFolderItem selectedParent
+                && Directory.Exists(selectedParent.Path))
+                return selectedParent.Path;
+
+            if (lvRepos?.SelectedItems.Count > 0
+                && lvRepos.SelectedItems[0].Tag is GitRepo selectedRepo
+                && !string.IsNullOrWhiteSpace(selectedRepo.Path)) {
+                string repoPath = Path.GetFullPath(selectedRepo.Path);
+                var ownerParent = _settings.ParentPaths
+                    .Where(Directory.Exists)
+                    .Select(Path.GetFullPath)
+                    .Where(parent => {
+                        string prefix = parent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                        return repoPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                               || repoPath.Equals(parent, StringComparison.OrdinalIgnoreCase);
+                    })
+                    .OrderByDescending(parent => parent.Length)
+                    .FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(ownerParent))
+                    return ownerParent;
+            }
+
+            if (lbParents != null) {
+                foreach (var item in lbParents.CheckedItems) {
+                    if (item is ParentFolderItem checkedParent && Directory.Exists(checkedParent.Path))
+                        return checkedParent.Path;
+                }
+            }
+
+            return _settings.ParentPaths.FirstOrDefault(Directory.Exists) ?? "";
+        }
+
+        private string ResolveSelectedRepoBranch() {
+            if (lvRepos?.SelectedItems.Count > 0
+                && lvRepos.SelectedItems[0].Tag is GitRepo selectedRepo
+                && !string.IsNullOrWhiteSpace(selectedRepo.CurrentBranch)
+                && selectedRepo.CurrentBranch != "—")
+                return selectedRepo.CurrentBranch;
+
+            return "";
         }
 
         private static string SummarizeSwitchFailure(string message) {
