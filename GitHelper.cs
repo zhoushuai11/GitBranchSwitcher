@@ -999,6 +999,115 @@ namespace GitBranchSwitcher {
             }
         }
 
+        private static string GetGitErrorText((int code, string stdout, string stderr) gitResult) {
+            string text = string.IsNullOrWhiteSpace(gitResult.stderr)
+                ? gitResult.stdout
+                : gitResult.stderr;
+            return text.Trim();
+        }
+
+        private static bool IsRemoteMissingObjectError(string errorText, string sha) {
+            if (string.IsNullOrWhiteSpace(errorText))
+                return false;
+
+            return errorText.Contains($"not our ref {sha}", StringComparison.OrdinalIgnoreCase)
+                || errorText.Contains($"unadvertised object {sha}", StringComparison.OrdinalIgnoreCase)
+                || errorText.Contains($"no such ref {sha}", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool ContainsObjectSha(string text, string sha) =>
+            Regex.IsMatch(text ?? "", $@"(?<![0-9a-fA-F])\??{Regex.Escape(sha)}(?![0-9a-fA-F])");
+
+        private static bool IsObjectRequiredByLocalRefs(string repoPath, string sha, out string detail) {
+            var revList = RunGit(repoPath, "rev-list --objects --all --missing=print", -1);
+            string revListText = (revList.stdout + Environment.NewLine + revList.stderr).Trim();
+            if (ContainsObjectSha(revListText, sha)) {
+                detail = BuildLocalObjectReferenceDetail(repoPath, sha, FirstNonEmptyLineContaining(revListText, sha));
+                return true;
+            }
+
+            var fsck = RunGit(repoPath, "fsck --connectivity-only --no-dangling", -1);
+            string fsckText = (fsck.stdout + Environment.NewLine + fsck.stderr).Trim();
+            if (ContainsObjectSha(fsckText, sha)) {
+                detail = BuildLocalObjectReferenceDetail(repoPath, sha, FirstNonEmptyLineContaining(fsckText, sha));
+                return true;
+            }
+
+            if (revList.code != 0 && fsck.code != 0) {
+                detail = string.IsNullOrWhiteSpace(revListText)
+                    ? GetGitErrorText(fsck)
+                    : revListText;
+                return true;
+            }
+
+            detail = "";
+            return false;
+        }
+
+        private static string BuildLocalObjectReferenceDetail(string repoPath, string sha, string fallback) {
+            var refsResult = RunGit(repoPath, "for-each-ref --format=%(refname)", -1);
+            if (refsResult.code != 0)
+                return fallback;
+
+            var hits = new List<string>();
+            foreach (string refName in refsResult.stdout.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)) {
+                if (_cancelRequested)
+                    break;
+
+                string trimmedRef = refName.Trim();
+                if (trimmedRef.Length == 0)
+                    continue;
+
+                var check = RunGit(repoPath, $"rev-list --objects --missing=print {QuoteGitArgument(trimmedRef)}", -1);
+                string checkText = (check.stdout + Environment.NewLine + check.stderr).Trim();
+                if (!ContainsObjectSha(checkText, sha))
+                    continue;
+
+                string line = FirstNonEmptyLineContaining(checkText, sha);
+                hits.Add(string.IsNullOrWhiteSpace(line)
+                    ? ShortenRefName(trimmedRef)
+                    : $"{ShortenRefName(trimmedRef)} -> {line}");
+                if (hits.Count >= 5)
+                    break;
+            }
+
+            if (hits.Count == 0)
+                return fallback;
+
+            string suffix = hits.Count >= 5 ? " 等" : "";
+            return $"引用: {string.Join("; ", hits)}{suffix}";
+        }
+
+        private static string ShortenRefName(string refName) {
+            if (refName.StartsWith("refs/heads/", StringComparison.OrdinalIgnoreCase))
+                return refName["refs/heads/".Length..];
+            if (refName.StartsWith("refs/remotes/", StringComparison.OrdinalIgnoreCase))
+                return refName["refs/remotes/".Length..];
+            if (refName.StartsWith("refs/tags/", StringComparison.OrdinalIgnoreCase))
+                return "tag/" + refName["refs/tags/".Length..];
+            if (refName.Equals("refs/stash", StringComparison.OrdinalIgnoreCase))
+                return "stash";
+            return refName;
+        }
+
+        private static string FirstNonEmptyLineContaining(string text, string value) {
+            foreach (string line in (text ?? "").Split(new[] { "\r\n", "\n" }, StringSplitOptions.None)) {
+                if (!string.IsNullOrWhiteSpace(line)
+                    && line.Contains(value, StringComparison.OrdinalIgnoreCase))
+                    return line.Trim();
+            }
+            return "";
+        }
+
+        private static string MoveLooseObjectToBackup(string objectPath, string sha, string backupDir) {
+            string backupPrefixDir = Path.Combine(backupDir, sha[..2]);
+            string backupPath = Path.Combine(backupPrefixDir, sha[2..]);
+            Directory.CreateDirectory(backupPrefixDir);
+            File.SetAttributes(objectPath, FileAttributes.Normal);
+            File.Move(objectPath, backupPath);
+            return backupPath;
+        }
+
         private static List<(string sha, string path, string error)> ScanCorruptLooseObjects(
             string gitDir,
             Action<string>? logger,
@@ -1109,6 +1218,9 @@ namespace GitBranchSwitcher {
                     return result;
                 }
 
+                var remoteRecovered = new List<(string sha, string path, string error)>();
+                var localOnly = new List<(string sha, string path, string error)>();
+
                 Step($"从 origin 精确恢复 {corrupt.Count} 个对象...");
                 foreach (var chunk in corrupt.Chunk(20)) {
                     if (_cancelRequested) {
@@ -1122,17 +1234,48 @@ namespace GitBranchSwitcher {
                         recoveryDir,
                         $"-c gc.auto=0 fetch --no-tags --no-write-fetch-head origin {shaArgs}",
                         -1);
-                    if (fetchResult.code != 0) {
-                        string error = string.IsNullOrWhiteSpace(fetchResult.stderr)
-                            ? fetchResult.stdout
-                            : fetchResult.stderr;
-                        result.message = $"按 SHA 恢复失败: {error.Trim()}";
+                    if (fetchResult.code == 0) {
+                        remoteRecovered.AddRange(chunk);
+                        continue;
+                    }
+
+                    string batchError = GetGitErrorText(fetchResult);
+                    if (!chunk.Any(x => IsRemoteMissingObjectError(batchError, x.sha))) {
+                        result.message = $"按 SHA 恢复失败: {batchError}";
+                        return result;
+                    }
+
+                    Step("批量恢复遇到远端缺失对象，改为逐个确认...");
+                    foreach (var item in chunk) {
+                        if (_cancelRequested) {
+                            result.cancelled = true;
+                            result.message = "用户取消";
+                            return result;
+                        }
+
+                        var singleFetch = RunGit(
+                            recoveryDir,
+                            $"-c gc.auto=0 fetch --no-tags --no-write-fetch-head origin {item.sha}",
+                            -1);
+                        if (singleFetch.code == 0) {
+                            remoteRecovered.Add(item);
+                            continue;
+                        }
+
+                        string singleError = GetGitErrorText(singleFetch);
+                        if (IsRemoteMissingObjectError(singleError, item.sha)) {
+                            localOnly.Add(item);
+                            Step($"远端无此对象，按本地残留处理: {item.sha}");
+                            continue;
+                        }
+
+                        result.message = $"按 SHA 恢复失败 {item.sha}: {singleError}";
                         return result;
                     }
                 }
 
                 string recoveredObjectsDir = Path.Combine(recoveryDir, "objects");
-                foreach (var item in corrupt) {
+                foreach (var item in remoteRecovered) {
                     string recoveredPath = Path.Combine(recoveredObjectsDir, item.sha[..2], item.sha[2..]);
                     string recoveryError = "恢复文件不存在";
                     if (!File.Exists(recoveredPath)
@@ -1144,7 +1287,7 @@ namespace GitBranchSwitcher {
 
                 Directory.CreateDirectory(backupDir);
                 result.backupPath = backupDir;
-                foreach (var item in corrupt) {
+                foreach (var item in remoteRecovered) {
                     if (_cancelRequested) {
                         result.cancelled = true;
                         result.message = "用户取消";
@@ -1154,15 +1297,12 @@ namespace GitBranchSwitcher {
                     string prefix = item.sha[..2];
                     string suffix = item.sha[2..];
                     string recoveredPath = Path.Combine(recoveredObjectsDir, prefix, suffix);
-                    string backupPrefixDir = Path.Combine(backupDir, prefix);
-                    string backupPath = Path.Combine(backupPrefixDir, suffix);
+                    string backupPath = Path.Combine(backupDir, prefix, suffix);
                     string replacementPath = item.path + ".repair-" + Guid.NewGuid().ToString("N");
-                    Directory.CreateDirectory(backupPrefixDir);
                     File.Copy(recoveredPath, replacementPath, true);
 
                     try {
-                        File.SetAttributes(item.path, FileAttributes.Normal);
-                        File.Move(item.path, backupPath);
+                        MoveLooseObjectToBackup(item.path, item.sha, backupDir);
                         File.Move(replacementPath, item.path);
                     } catch {
                         try {
@@ -1178,6 +1318,31 @@ namespace GitBranchSwitcher {
                         throw new InvalidDataException($"替换后校验失败 {item.sha}: {finalError}");
                     result.repairedCount++;
                     Step($"已修复: {item.sha}");
+                }
+
+                foreach (var item in localOnly) {
+                    if (_cancelRequested) {
+                        result.cancelled = true;
+                        result.message = "用户取消";
+                        return result;
+                    }
+
+                    string backupPath = MoveLooseObjectToBackup(item.path, item.sha, backupDir);
+                    if (IsObjectRequiredByLocalRefs(repoPath, item.sha, out string requiredDetail)) {
+                        try {
+                            Directory.CreateDirectory(Path.GetDirectoryName(item.path)!);
+                            if (!File.Exists(item.path) && File.Exists(backupPath))
+                                File.Move(backupPath, item.path);
+                        } catch { }
+
+                        result.message = string.IsNullOrWhiteSpace(requiredDetail)
+                            ? $"远端无此对象，但本地引用仍需要它，无法自动修复: {item.sha}"
+                            : $"远端无此对象，但本地引用仍需要它，无法自动修复: {item.sha} ({requiredDetail})";
+                        return result;
+                    }
+
+                    result.repairedCount++;
+                    Step($"已隔离本地残留对象: {item.sha}");
                 }
 
                 result.ok = true;

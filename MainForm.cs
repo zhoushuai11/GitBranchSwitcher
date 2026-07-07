@@ -3734,6 +3734,8 @@ namespace GitBranchSwitcher {
                     SetSubItem(item, 4, result.corruptCount.ToString());
                     SetSubItem(item, 5, result.repairedCount.ToString());
                     SetSubItem(item, 6, result.message);
+                    if (!string.IsNullOrWhiteSpace(result.message))
+                        AppendRepairLog($"[{repo.Name}] {result.message}");
                     repairedCount += result.repairedCount;
 
                     if (result.cancelled) {
